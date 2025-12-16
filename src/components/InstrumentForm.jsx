@@ -99,6 +99,9 @@ const InstrumentForm = forwardRef(({
     queueItemId: queueItemId, // Guardar el ID de la cola
   });
 
+  // Hook de configuracion por tipo de inversion
+  const investmentTypeConfig = useInvestmentTypeConfig(formData.investmentTypeCode);
+
   // Hook de modo del formulario
   const {
     mode,
@@ -107,7 +110,7 @@ const InstrumentForm = forwardRef(({
     modeColor,
     modeDescription,
     isFieldReadOnly,
-  } = useFormMode(null, formData);
+  } = useFormMode(null, formData, investmentTypeConfig?.config);
 
   // Notificar al padre cuando cambia el estado dirty (incluye formData para borradores)
   useEffect(() => {
@@ -177,8 +180,6 @@ const InstrumentForm = forwardRef(({
     loading: catalogsLoading,
   } = useCatalogOptions();
 
-  // Hook de configuracion por tipo de inversion
-  const investmentTypeConfig = useInvestmentTypeConfig(formData.investmentTypeCode);
 
   // Hook para obtener defaults del Asset Type
   const { getDefaultValues } = useAssetTypeConfig(formData.investmentTypeCode, formData);
@@ -200,7 +201,26 @@ const InstrumentForm = forwardRef(({
         }
       }
     }
-  }, [formData.investmentTypeCode, mode]); // Solo cuando cambia el tipo, no cuando cambia formData completo
+  }, [formData.investmentTypeCode, mode, getDefaultValues, setFields]); 
+  
+  // Auto-fill currencies from queue for Cash, Payable, BankDebt, Fund
+  useEffect(() => {
+    if ([3, 4, 5, 6].includes(formData.investmentTypeCode) && formData.moneda && mode === 'nueva') {
+      (async () => {
+        try {
+          const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
+          if (monedaRes.success && (!formData.issueCurrency || !formData.riskCurrency)) {
+            setFields({
+              issueCurrency: monedaRes.data.nombre,
+              riskCurrency: monedaRes.data.nombre,
+            });
+          }
+        } catch (error) {
+          console.error('Error fetching currency:', error);
+        }
+      })();
+    }
+  }, [formData.investmentTypeCode, formData.moneda, mode, formData.issueCurrency, formData.riskCurrency, setFields]);
 
   // ============================================================================
   // LOGICA DE VISIBILIDAD DE SECCIONES - CENTRALIZADA EN HOOK

@@ -27,9 +27,11 @@ import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import SyncOutlinedIcon from '@mui/icons-material/SyncOutlined';
+import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 import { api } from '../services/api';
 import { colors } from '../styles/theme';
+import { downloadBulkLoadTemplate } from '../utils/excel';
 
 // Configuración de paginación
 const PAGE_SIZE = 10;
@@ -170,6 +172,7 @@ const WorkQueue = forwardRef(({ onSelectItem, selectedItemId = null, resetOnMoun
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const tableContainerRef = useRef(null);
@@ -226,6 +229,18 @@ const WorkQueue = forwardRef(({ onSelectItem, selectedItemId = null, resetOnMoun
       onSelectItem(item);
     }
   }, [onSelectItem]);
+
+  // Descargar plantilla Excel
+  const handleDownloadTemplate = useCallback(async () => {
+    setDownloading(true);
+    try {
+      await downloadBulkLoadTemplate(items);
+    } catch (err) {
+      console.error('Error descargando plantilla:', err);
+    } finally {
+      setDownloading(false);
+    }
+  }, [items]);
 
   // Items visibles (paginados)
   const visibleItems = useMemo(() => {
@@ -347,6 +362,34 @@ const WorkQueue = forwardRef(({ onSelectItem, selectedItemId = null, resetOnMoun
         </Box>
         
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Tooltip title="Descargar plantilla Excel">
+            <IconButton
+              onClick={handleDownloadTemplate}
+              disabled={downloading || items.length === 0}
+              sx={{
+                width: 40,
+                height: 40,
+                backgroundColor: items.length > 0 ? 'rgba(13, 148, 136, 0.08)' : '#fff',
+                border: `1px solid ${items.length > 0 ? 'rgba(13, 148, 136, 0.2)' : colors.border.light}`,
+                color: items.length > 0 ? colors.primary.main : colors.grey[400],
+                '&:hover': {
+                  backgroundColor: items.length > 0 ? 'rgba(13, 148, 136, 0.15)' : colors.grey[50],
+                  borderColor: items.length > 0 ? colors.primary.main : colors.border.default,
+                },
+                '&:disabled': {
+                  backgroundColor: colors.grey[100],
+                  color: colors.grey[400],
+                  borderColor: colors.border.light,
+                },
+              }}
+            >
+              {downloading ? (
+                <CircularProgress size={18} thickness={4} sx={{ color: colors.primary.main }} />
+              ) : (
+                <FileDownloadOutlinedIcon sx={{ fontSize: 20 }} />
+              )}
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refrescar lista">
             <IconButton
               onClick={() => loadQueue(true)}

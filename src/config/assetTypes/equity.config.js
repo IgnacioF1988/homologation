@@ -51,7 +51,7 @@ export const EQUITY_CONFIG = {
     steps: [
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       { id: 2, requiredFields: ['publicDataSource'], conditionalFields: { condition: 'isBBG', fields: ['tickerBBG'] } },
-      { id: 3, requiredFields: ['companyName'] },
+      { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS' ]},
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
     ],
   },
@@ -161,6 +161,13 @@ export const EQUITY_CONFIG = {
       fields: {
         ...createCompanyFields({ includeSectorGICS: true }),
         // Override: Para EQ, GICS es requerido
+        issuerTypeCode: {
+            name: 'issuerTypeCode',
+            label: 'Issuer_Type_Code',
+            type: 'select',
+            optionsKey: 'issuerTypes',
+            required: true,
+          },
         sectorGICS: {
           name: 'sectorGICS',
           label: 'Sector_GICS',
@@ -186,9 +193,46 @@ export const EQUITY_CONFIG = {
           includeEmisionNacional: false,
           includeSectorChile: true,
         }),
+        // Override specific fields to ensure they're explicit and required
+        issueCountry: {
+          name: 'issueCountry',
+          label: 'Issue_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+        },
+        riskCountry: {
+          name: 'riskCountry',
+          label: 'Risk_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          cascade: ['sectorChileTypeCode'],
+          cascadeCondition: { notEquals: 'CL' },
+        },
+        issueCurrency: {
+          name: 'issueCurrency',
+          label: 'Issue_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+        },
+        riskCurrency: {
+          name: 'riskCurrency',
+          label: 'Risk_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+        },
+        sectorChileTypeCode: {
+          name: 'sectorChileTypeCode',
+          label: 'Sector_Chile_Type_Code',
+          type: 'select',
+          optionsKey: 'sectorChile',
+          visibleWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] },
+          requiredWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] },
+        },
       },
-
-      
     },
   },
 

@@ -72,8 +72,15 @@ const renderField = (
   const fieldValue = formData[name] || '';
   const fieldOptions = options?.[fieldConfig.optionsKey] || fieldConfig.options || [];
   const error = formErrors?.[name] || null;
-  const isReadOnly = isFieldReadOnly?.(name) ?? false;
-
+  const isCashOrPayableOrBankDebt = [3, 4, 5].includes(formData.investmentTypeCode);
+  const isFund = formData.investmentTypeCode === 6;
+  const autoFilledForCashTypes = ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency', 'companyName', 'issuerTypeCode', 'sectorGICS'];
+  const autoFilledForFund = ['issuerTypeCode', 'sectorGICS', 'riskCountry', 'issueCurrency', 'riskCurrency'];
+  const isReadOnly = 
+    (isCashOrPayableOrBankDebt && autoFilledForCashTypes.includes(name)) ||
+    (isFund && autoFilledForFund.includes(name)) ||
+    (isFieldReadOnly?.(name) ?? false);
+    
   // Props comunes para todos los campos
   const commonProps = {
     key: name,
