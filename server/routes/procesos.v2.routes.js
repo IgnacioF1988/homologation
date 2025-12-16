@@ -99,22 +99,26 @@ router.post('/v2/ejecutar', async (req, res) => {
   try {
     const pool = await getInteligenciaPool();
 
-    // Primero crear la ejecución usando sp_Inicializar_Ejecucion
-    const initRequest = pool.request();
-    initRequest.input('FechaReporte', fechaReporte);
-    initRequest.output('ID_Ejecucion', sql.Int);
+    // NOTA: El SP Process_Funds NO acepta ID_Ejecucion ni ID_Fund
+    // Solo procesa todos los fondos para la fecha dada
+    // Creamos un ID de ejecución sintético para tracking
+    const idEjecucion = Date.now(); // Timestamp como ID temporal
 
-    const initResult = await initRequest.execute('logs.sp_Inicializar_Ejecucion');
-    const idEjecucion = initResult.output.ID_Ejecucion;
+    if (idFund) {
+      return res.status(400).json({
+        success: false,
+        error: 'El SP actual no soporta procesamiento por fondo individual. Use fechaReporte para procesar todos los fondos.',
+      });
+    }
 
-    const modoEjecucion = idFund ? `Fondo ${idFund}` : 'Todos los fondos';
+    const modoEjecucion = 'Todos los fondos';
     console.log(`[Ejecución ${idEjecucion}] Iniciada para fecha ${fechaReporte} - Modo: ${modoEjecucion}`);
 
     // Guardar en memoria para tracking
     activeExecutions.set(idEjecucion, {
       estado: 'EN_PROGRESO',
       fechaReporte,
-      idFund: idFund || null,
+      idFund: null,
       iniciadoEn: new Date(),
     });
 
@@ -124,14 +128,14 @@ router.post('/v2/ejecutar', async (req, res) => {
       data: {
         ID_Ejecucion: idEjecucion,
         FechaReporte: fechaReporte,
-        ID_Fund: idFund || null,
+        ID_Fund: null,
         Estado: 'EN_PROGRESO',
         IniciadoEn: new Date().toISOString(),
       },
     });
 
     // Ejecutar el proceso en background
-    executeProcessV2(pool, idEjecucion, fechaReporte, idFund);
+    executeProcessV2(pool, idEjecucion, fechaReporte, null);
 
   } catch (err) {
     console.error('Error iniciando ejecución:', err);
@@ -143,33 +147,28 @@ router.post('/v2/ejecutar', async (req, res) => {
 });
 
 // Función para ejecutar el proceso en background
-// idFund: null = todos los fondos, string = solo ese fondo
+// NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
     const request = pool.request();
-    request.input('FechaReporte', fechaReporte);
-    request.input('ID_Ejecucion', idEjecucion);
 
-    // Pasar ID_Fund si se especificó (ejecución por fondo individual)
-    if (idFund) {
-      request.input('ID_Fund', idFund);
-    }
+    // Solo pasar FechaReporte (único parámetro que acepta el SP)
+    request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
 
     // Timeout largo para el proceso
     request.timeout = 600000; // 10 minutos
 
-    // Capturar mensajes PRINT
+    // Capturar mensajes PRINT del SP
     request.on('info', (info) => {
       if (info.message) {
         console.log(`[Ejecución ${idEjecucion}] ${info.message}`);
       }
     });
 
-    // Ejecutar el orquestador v2
-    const modoLog = idFund ? `(Fondo: ${idFund})` : '(Todos los fondos)';
-    console.log(`[Ejecución ${idEjecucion}] Iniciando Process_Funds_v2 ${modoLog}...`);
-    const result = await request.execute('process.Process_Funds_v2');
-    console.log(`[Ejecución ${idEjecucion}] Process_Funds_v2 completado con código: ${result.returnValue}`);
+    // Ejecutar el orquestador (procesa TODOS los fondos)
+    console.log(`[Ejecución ${idEjecucion}] Iniciando Process_Funds para fecha ${fechaReporte}...`);
+    const result = await request.execute('process.Process_Funds');
+    console.log(`[Ejecución ${idEjecucion}] Process_Funds completado con código: ${result.returnValue}`);
 
     // Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
