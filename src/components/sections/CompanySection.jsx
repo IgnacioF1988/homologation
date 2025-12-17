@@ -150,28 +150,6 @@ const CompanySection = ({
     }
   }, [formData.companyName, selectedCompany, companyState, setCompanyState]);
 
-  // Auto-fill Fund defaults
-  useEffect(() => {
-    if (formData.investmentTypeCode === 6 && mode === 'nueva') {
-      (async () => {
-        try {
-          const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
-          
-          if (monedaRes.success) {
-            // Always enforce these defaults for Fund, even if company was selected
-            handleChange({ target: { name: 'issuerTypeCode', value: '0' } });
-            handleChange({ target: { name: 'sectorGICS', value: '66666666' } });
-            handleChange({ target: { name: 'riskCountry', value: '[Fund]' } });
-            handleChange({ target: { name: 'issueCurrency', value: monedaRes.data.nombre } });
-            handleChange({ target: { name: 'riskCurrency', value: monedaRes.data.nombre } });
-          }
-        } catch (error) {
-          console.error('Error setting Fund defaults:', error);
-        }
-      })();
-    }
-  }, [formData.investmentTypeCode, mode, formData.moneda, formData.companyName, handleChange]);
-  
   // Cerrar sugerencias al hacer click fuera
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -358,6 +336,17 @@ const CompanySection = ({
   const getError = useCallback((fieldName) => {
     return formErrors && formErrors[fieldName] ? formErrors[fieldName] : null;
   }, [formErrors]);
+
+  // DEBUG: Log valores de formData al renderizar (solo para Cash)
+  if (formData.investmentTypeCode === 3) {
+    console.log('[COMPANY-SECTION-RENDER] Cash - formData al renderizar:', {
+      companyName: formData.companyName,
+      issuerTypeCode: formData.issuerTypeCode,
+      sectorGICS: formData.sectorGICS,
+      mode,
+      companyState,
+    });
+  }
 
   // Solo visible si hay investmentTypeCode seleccionado
   if (!formData.investmentTypeCode) {

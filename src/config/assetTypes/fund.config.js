@@ -155,22 +155,23 @@ export const FUND_CONFIG = {
 
       // Campos de compania (todos explicitos, con sectorGICS)
       fields: {
-        ...createCompanyFields({ includeSectorGICS: true }),
         companyName: {
           name: 'companyName',
           label: 'Nombre Compania',
-          type: 'company-autocomplete',
+          type: 'text',
           required: true,
+          readOnly: true,
+          defaultValue: '[FUND]',
         },
         issuerTypeCode: {
-            name: 'issuerTypeCode',
-            label: 'Issuer_Type_Code',
-            type: 'select',
-            optionsKey: 'issuerTypes',
-            required: true,
-            readOnly: true,
-            defaultValue: '0',
-          },
+          name: 'issuerTypeCode',
+          label: 'Issuer_Type_Code',
+          type: 'select',
+          optionsKey: 'issuerTypes',
+          required: true,
+          readOnly: true,
+          defaultValue: '0',
+        },
         sectorGICS: {
           name: 'sectorGICS',
           label: 'Sector_GICS',
@@ -213,7 +214,8 @@ export const FUND_CONFIG = {
           type: 'select',
           optionsKey: 'paises',
           required: true,
-          readOnly: true, // Auto-filled to [Fund]
+          readOnly: true,
+          defaultValue: '[Fund]', // Auto-filled to [Fund]
         },
         issueCurrency: {
           name: 'issueCurrency',
@@ -252,9 +254,9 @@ export const FUND_CONFIG = {
       step: 5,
 
       fields: {
-        investmentFundType: {
-          name: 'investmentFundType',
-          label: 'Investment_Fund_Type',
+        fundTypeCode: {
+          name: 'fundTypeCode',
+          label: 'Fund_Type_Code',
           type: 'select',
           required: true,
           optionsKey: 'fundTypes',
@@ -271,8 +273,8 @@ export const FUND_CONFIG = {
   // ===========================================
   validations: {
     fundTypeRequired: {
-      condition: (formData) => !formData.investmentFundType,
-      field: 'investmentFundType',
+      condition: (formData) => !formData.fundTypeCode,
+      field: 'fundTypeCode',
       message: 'El tipo de fondo es obligatorio',
     },
   },

@@ -1,9 +1,4 @@
 
-import {
-  createCompanyFields,
-  createGeographyFields,
-} from './_base';
-
 export const PAYABLE_RECEIVABLE_CONFIG = {
   id: 4, // ID del catalogo investmentTypes
   label: 'Payable/Receivable',
@@ -100,8 +95,7 @@ export const PAYABLE_RECEIVABLE_CONFIG = {
       icon: 'BusinessIcon',
       step: 3,
 
-      fields: { 
-        ...createCompanyFields({ includeSectorGICS: false }),
+      fields: {
         companyName: {
           name: 'companyName',
           label: 'Nombre Compania',
@@ -145,10 +139,6 @@ export const PAYABLE_RECEIVABLE_CONFIG = {
       ],
 
       fields: {
-        ...createGeographyFields({
-          includeEmisionNacional: false,
-          includeSectorChile: false,
-        }),
         issueCountry: {
           name: 'issueCountry',
           label: 'Issue_Country',

@@ -60,6 +60,9 @@ import { mapRegistroCompleto, mapRegistroSinMonedas } from '../utils/instrumentM
 // Styles
 import { formContainer } from '../styles/formStyles';
 
+// BEACON LOG - Verificar que código actualizado se está sirviendo
+console.log('[BEACON-2025-12-17-v2] InstrumentForm.jsx CARGADO - Versión actualizada');
+
 const InstrumentForm = forwardRef(({
   // Datos iniciales de la cola (nombreFuente, fuente, moneda)
   initialData = null,
@@ -184,43 +187,118 @@ const InstrumentForm = forwardRef(({
   // Hook para obtener defaults del Asset Type
   const { getDefaultValues } = useAssetTypeConfig(formData.investmentTypeCode, formData);
 
-  // Aplicar valores por defecto cuando cambia el tipo de inversion (solo en modo nueva)
+  // =============================================================================
+  // AUTO-APLICACIÓN DE DEFAULTS POR TIPO DE INVERSIÓN
+  // Consolidado: aplica defaults estáticos + monedas dinámicas en un solo lugar
+  // =============================================================================
   useEffect(() => {
-    if (mode === 'nueva' && formData.investmentTypeCode) {
-      const defaults = getDefaultValues();
-      if (Object.keys(defaults).length > 0) {
-        // Solo aplicar defaults para campos que estan vacios
+    console.log('[AUTO-DEFAULTS] useEffect ejecutado:', {
+      mode,
+      investmentTypeCode: formData.investmentTypeCode,
+      moneda: formData.moneda
+    });
+
+    // QUICK FIX: Solo bloquear si NO hay investmentTypeCode
+    if (!formData.investmentTypeCode) {
+      console.log('[AUTO-DEFAULTS] Saliendo - no hay investmentTypeCode');
+      return;
+    }
+
+    // No sobrescribir datos en modo exacta/parcial
+    if (mode === 'exacta' || mode === 'parcial') {
+      console.log('[AUTO-DEFAULTS] Saliendo - modo exacta/parcial, no sobrescribir');
+      return;
+    }
+
+    const applyDefaults = async () => {
+      try {
         const fieldsToApply = {};
-        Object.entries(defaults).forEach(([fieldName, defaultValue]) => {
+
+        // 1. SIEMPRE aplicar defaults estáticos del config (no depende de moneda)
+        const staticDefaults = getDefaultValues();
+        console.log('[AUTO-DEFAULTS] Defaults del config:', staticDefaults);
+
+        Object.entries(staticDefaults).forEach(([fieldName, defaultValue]) => {
+          // No sobrescribir campos que ya tienen valor
           if (!formData[fieldName] || formData[fieldName] === '') {
+            console.log(`[AUTO-DEFAULTS] Campo ${fieldName} vacío, aplicando default:`, defaultValue);
             fieldsToApply[fieldName] = defaultValue;
+          } else {
+            console.log(`[AUTO-DEFAULTS] Campo ${fieldName} ya tiene valor:`, formData[fieldName]);
           }
         });
-        if (Object.keys(fieldsToApply).length > 0) {
-          setFields(fieldsToApply);
-        }
-      }
-    }
-  }, [formData.investmentTypeCode, mode, getDefaultValues, setFields]); 
-  
-  // Auto-fill currencies from queue for Cash, Payable, BankDebt, Fund
-  useEffect(() => {
-    if ([3, 4, 5, 6].includes(formData.investmentTypeCode) && formData.moneda && mode === 'nueva') {
-      (async () => {
-        try {
-          const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
-          if (monedaRes.success && (!formData.issueCurrency || !formData.riskCurrency)) {
-            setFields({
-              issueCurrency: monedaRes.data.nombre,
-              riskCurrency: monedaRes.data.nombre,
-            });
+
+        // 2. SI hay moneda, aplicar currencies (solo para tipos que lo necesitan)
+        if ([3, 4, 5, 6, 7].includes(formData.investmentTypeCode) && formData.moneda) {
+          console.log('[AUTO-DEFAULTS] Obteniendo monedas de API para tipo:', formData.investmentTypeCode);
+          try {
+            const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
+
+            if (monedaRes.success) {
+              console.log('[AUTO-DEFAULTS] Moneda obtenida:', monedaRes.data.nombre);
+              if (!formData.issueCurrency && !fieldsToApply.issueCurrency) {
+                fieldsToApply.issueCurrency = monedaRes.data.nombre;
+              }
+              if (!formData.riskCurrency && !fieldsToApply.riskCurrency) {
+                fieldsToApply.riskCurrency = monedaRes.data.nombre;
+              }
+            }
+          } catch (apiError) {
+            console.error('[AUTO-DEFAULTS] Error obteniendo moneda de API:', apiError);
           }
-        } catch (error) {
-          console.error('Error fetching currency:', error);
         }
-      })();
+
+        // 3. Aplicar todos en batch
+        if (Object.keys(fieldsToApply).length > 0) {
+          console.log('[AUTO-DEFAULTS] Aplicando campos:', fieldsToApply);
+          setFields(fieldsToApply);
+
+          // DEBUG: Verificar inmediatamente después (próximo tick)
+          setTimeout(() => {
+            console.log('[AUTO-DEFAULTS-VERIFY] formData después de setFields:', {
+              companyName: formData.companyName,
+              issuerTypeCode: formData.issuerTypeCode,
+              sectorGICS: formData.sectorGICS,
+            });
+          }, 100);
+        } else {
+          console.log('[AUTO-DEFAULTS] No hay campos para aplicar');
+        }
+      } catch (error) {
+        console.error('[AUTO-DEFAULTS] Error aplicando defaults:', error);
+      }
+    };
+
+    applyDefaults();
+  }, [formData.investmentTypeCode, mode, formData.moneda, getDefaultValues, setFields]);
+
+  // =============================================================================
+  // DEBUG: Verificar valores de formData después de aplicar defaults
+  // =============================================================================
+  useEffect(() => {
+    if (formData.investmentTypeCode === 3) {
+      console.log('[FORM-DATA-CASH] Valores actuales:', {
+        companyName: formData.companyName,
+        issuerTypeCode: formData.issuerTypeCode,
+        sectorGICS: formData.sectorGICS,
+        issueCountry: formData.issueCountry,
+        riskCountry: formData.riskCountry,
+        issueCurrency: formData.issueCurrency,
+        riskCurrency: formData.riskCurrency,
+      });
     }
-  }, [formData.investmentTypeCode, formData.moneda, mode, formData.issueCurrency, formData.riskCurrency, setFields]);
+  }, [formData.companyName, formData.issuerTypeCode, formData.sectorGICS, formData.issueCountry, formData.riskCountry, formData.issueCurrency, formData.riskCurrency, formData.investmentTypeCode]);
+
+  // =============================================================================
+  // AUTO-ACTIVACIÓN DE MODO 'NUEVA'
+  // Si usuario selecciona investment type sin marcar checkbox, auto-activar modo nueva
+  // =============================================================================
+  useEffect(() => {
+    if (!mode && formData.investmentTypeCode && !formData.idInstrumento && activarInstrumentoNuevo) {
+      console.log('[AUTO-MODE] Auto-activando modo nueva por selección de investment type');
+      activarInstrumentoNuevo();
+    }
+  }, [mode, formData.investmentTypeCode, formData.idInstrumento, activarInstrumentoNuevo]);
 
   // ============================================================================
   // LOGICA DE VISIBILIDAD DE SECCIONES - CENTRALIZADA EN HOOK
@@ -653,3 +731,5 @@ const InstrumentForm = forwardRef(({
 InstrumentForm.displayName = 'InstrumentForm';
 
 export default InstrumentForm;
+
+// Force recompile

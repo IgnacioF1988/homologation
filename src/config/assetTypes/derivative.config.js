@@ -16,7 +16,7 @@
  * No usa useSharedFields para maxima claridad.
  */
 
-import { createCompanyFields } from './_base';
+// No se necesitan imports de _base - todos los campos definidos explícitamente
 
 export const DERIVATIVE_CONFIG = {
   // ===========================================
@@ -45,7 +45,7 @@ export const DERIVATIVE_CONFIG = {
     steps: [
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       { id: 2, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
-      { id: 3, requiredFields: ['subId'] },
+      { id: 3, requiredFields: ['subId', 'issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'] },
     ],
   },
 
@@ -106,20 +106,31 @@ export const DERIVATIVE_CONFIG = {
 
       // Campos de compania (todos explicitos, con sectorGICS)
       fields: {
-        ...createCompanyFields({ includeSectorGICS: true }),
+        companyName: {
+          name: 'companyName',
+          label: 'Nombre Compania',
+          type: 'text',
+          required: true,
+          readOnly: true,
+          defaultValue: '[DERIV]',
+        },
         issuerTypeCode: {
-            name: 'issuerTypeCode',
-            label: 'Issuer_Type_Code',
-            type: 'select',
-            optionsKey: 'issuerTypes',
-            required: true,
-          },
+          name: 'issuerTypeCode',
+          label: 'Issuer_Type_Code',
+          type: 'select',
+          optionsKey: 'issuerTypes',
+          required: true,
+          readOnly: true,
+          defaultValue: '0',
+        },
         sectorGICS: {
           name: 'sectorGICS',
           label: 'Sector_GICS',
           type: 'select',
           optionsKey: 'sectoresGICS',
           required: true,
+          readOnly: true,
+          defaultValue: '77777777',
         },
       },
     },
@@ -138,6 +149,10 @@ export const DERIVATIVE_CONFIG = {
           id: 'main',
           fields: ['subId'],
         },
+        {
+          id: 'geography',
+          fields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'],
+        },
       ],
 
       fields: {
@@ -152,6 +167,42 @@ export const DERIVATIVE_CONFIG = {
             { value: 20000, label: '20000 - Pata Corta (Liability)' },
           ],
           helpText: 'Seleccione 10000 para Pata Larga (Asset) o 20000 para Pata Corta (Liability)',
+        },
+        issueCountry: {
+          name: 'issueCountry',
+          label: 'Issue_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          readOnly: true,
+          defaultValue: '[Deriv]',
+        },
+        riskCountry: {
+          name: 'riskCountry',
+          label: 'Risk_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          readOnly: true,
+          defaultValue: '[Deriv]',
+        },
+        issueCurrency: {
+          name: 'issueCurrency',
+          label: 'Issue_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true,
+          // No defaultValue, auto-filled from queue
+        },
+        riskCurrency: {
+          name: 'riskCurrency',
+          label: 'Risk_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true,
+          // No defaultValue, auto-filled from queue
         },
       },
 
@@ -212,8 +263,6 @@ export const DERIVATIVE_CONFIG = {
     'tickerBBG',
     'sedol',
     'cusip',
-    'issueCountry',
-    'riskCountry',
     'sectorChileTypeCode',
     'emisionNacional',
     // Parametros FI

@@ -78,12 +78,14 @@ export const cascadeConfig = {
   nameInstrumento: {
     clearFields: [
       ...IDENTIFIER_FIELDS,
-      ...COMPANY_FIELDS,
-      ...GEOGRAPHY_FIELDS,
+      // NO limpiar COMPANY_FIELDS para tipos con defaults automáticos (conservar auto-defaults)
+      // ...COMPANY_FIELDS,
+      // NO limpiar GEOGRAPHY_FIELDS para tipos con defaults automáticos (conservar auto-defaults)
+      // ...GEOGRAPHY_FIELDS,
       ...FI_PARAMETER_FIELDS,
       ...BBG_FIELDS,
     ],
-    clearCompanyState: true,
+    clearCompanyState: false, // NO limpiar estado de compañía (preservar defaults)
   },
 
   // ===========================================

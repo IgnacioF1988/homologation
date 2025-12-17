@@ -18,10 +18,7 @@
  * No usa useSharedFields para maxima claridad.
  */
 
-import {
-  createCompanyFields,
-  createGeographyFields,
-} from './_base';
+// No se necesitan imports de _base - todos los campos definidos explícitamente
 
 export const CASH_CONFIG = {
   // ===========================================
@@ -153,26 +150,25 @@ export const CASH_CONFIG = {
       icon: 'BusinessIcon',
       step: 3,
 
-      // Campos de compania (todos explicitos, sin sectorGICS para Cash)
+      // Campos de compania (todos explicitos)
       fields: {
-        ...createCompanyFields({ includeSectorGICS: false }),
         companyName: {
           name: 'companyName',
           label: 'Nombre Compania',
           type: 'text',
           required: true,
-          readOnly: true,  
+          readOnly: true,
           defaultValue: '[CASH & EQUIV.]',
         },
         issuerTypeCode: {
-            name: 'issuerTypeCode',
-            label: 'Issuer_Type_Code',
-            type: 'select',
-            optionsKey: 'issuerTypes',
-            required: true,
-            readOnly: true,
-            defaultValue: '0',
-          },
+          name: 'issuerTypeCode',
+          label: 'Issuer_Type_Code',
+          type: 'select',
+          optionsKey: 'issuerTypes',
+          required: true,
+          readOnly: true,
+          defaultValue: '0',
+        },
         sectorGICS: {
           name: 'sectorGICS',
           label: 'Sector_GICS',
@@ -201,46 +197,52 @@ export const CASH_CONFIG = {
         },
       ],
 
-      // Campos de geografia (todos explicitos, sin emisionNacional)
+      // Campos de geografia (todos explicitos)
       fields: {
-        ...createGeographyFields({
-          includeEmisionNacional: false,
-          includeSectorChile: true,
-        }),
         issueCountry: {
-        name: 'issueCountry',
-        label: 'Issue_Country',
-        type: 'select',
-        optionsKey: 'paises',
-        required: true,
-        readOnly: true,
-        defaultValue: '[Cash & Eq]',
-      },
-      riskCountry: {
-        name: 'riskCountry',
-        label: 'Risk_Country',
-        type: 'select',
-        optionsKey: 'paises',
-        required: true,
-        readOnly: true,  
-        defaultValue: '[Cash & Eq]',
-      },
-      issueCurrency: {
-        name: 'issueCurrency',
-        label: 'Issue_Currency',
-        type: 'select',
-        optionsKey: 'monedas',
-        required: true,
-        readOnly: true,  // ADD THIS
-      },
-      riskCurrency: {
-        name: 'riskCurrency',
-        label: 'Risk_Currency',
-        type: 'select',
-        optionsKey: 'monedas',
-        required: true,
-        readOnly: true,  // ADD THIS
-      },
+          name: 'issueCountry',
+          label: 'Issue_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          readOnly: true,
+          defaultValue: '[Cash & Eq]',
+        },
+        riskCountry: {
+          name: 'riskCountry',
+          label: 'Risk_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          readOnly: true,
+          defaultValue: '[Cash & Eq]',
+          cascade: ['sectorChileTypeCode'],
+          cascadeCondition: { notEquals: 'CL' },
+        },
+        issueCurrency: {
+          name: 'issueCurrency',
+          label: 'Issue_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true,
+        },
+        riskCurrency: {
+          name: 'riskCurrency',
+          label: 'Risk_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true,
+        },
+        sectorChileTypeCode: {
+          name: 'sectorChileTypeCode',
+          label: 'Sector_Chile_Type_Code',
+          type: 'select',
+          optionsKey: 'sectorChile',
+          visibleWhen: { field: 'riskCountry', equals: 'CL' },
+          requiredWhen: { field: 'riskCountry', equals: 'CL' },
+        },
       },
 
       alerts: [],

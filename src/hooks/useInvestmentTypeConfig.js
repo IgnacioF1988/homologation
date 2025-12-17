@@ -59,9 +59,13 @@ const INVESTMENT_TYPE_ALIASES = {
   'Cash': 'CA',
   'Derivative': 'DE',
   // IDs numéricos como strings (tanto '1' como 1 se convierten a '1' en objetos JS)
-  '1': 'FI',
-  '2': 'EQ',
-  '7': 'DE',  // Derivados
+  '1': 'FI',  // Fixed Income
+  '2': 'EQ',  // Equity
+  '3': 'CA',  // Cash
+  '4': 'CA',  // Payable/Receivable (usa mismo código que Cash)
+  '5': 'CA',  // Bank Debt (usa mismo código que Cash)
+  '6': 'FI',  // Fund (usa mismo código que Fixed Income por ahora)
+  '7': 'DE',  // Derivative
 };
 
 /**

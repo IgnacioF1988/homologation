@@ -77,10 +77,23 @@ export const getInitialFormState = () => ({
 });
 
 const useFormState = (initialValues = {}) => {
-  const [formData, setFormData] = useState(() => ({
+  const [formData, setFormDataRaw] = useState(() => ({
     ...getInitialFormState(),
     ...initialValues,
   }));
+
+  // Wrapper de setFormData para debug
+  const setFormData = useCallback((updater) => {
+    setFormDataRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      // DEBUG: Log si companyName cambia a vacío
+      if (prev.companyName && !next.companyName) {
+        console.log('[SET-FORM-DATA] companyName se limpió!', { prev: prev.companyName, next: next.companyName });
+        console.trace('[SET-FORM-DATA] Stack trace:');
+      }
+      return next;
+    });
+  }, []);
 
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
@@ -88,7 +101,7 @@ const useFormState = (initialValues = {}) => {
 
   // Actualizar un campo
   const setField = useCallback((name, value) => {
-    setFormData(prev => ({
+    setFormDataRaw(prev => ({
       ...prev,
       [name]: value,
     }));
@@ -104,7 +117,13 @@ const useFormState = (initialValues = {}) => {
 
   // Actualizar multiples campos a la vez
   const setFields = useCallback((fields) => {
-    setFormData(prev => ({
+    // DEBUG: Log para rastrear quién llama setFields
+    if (fields.companyName !== undefined || fields.issuerTypeCode !== undefined || fields.sectorGICS !== undefined) {
+      console.log('[SET-FIELDS] Actualizando campos company:', fields);
+      console.trace('[SET-FIELDS] Stack trace:');
+    }
+
+    setFormDataRaw(prev => ({
       ...prev,
       ...fields,
     }));
@@ -157,7 +176,7 @@ const useFormState = (initialValues = {}) => {
 
   // Resetear formulario a valores iniciales
   const resetForm = useCallback((newInitialValues = {}) => {
-    setFormData({
+    setFormDataRaw({
       ...getInitialFormState(),
       ...newInitialValues,
     });
