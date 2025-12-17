@@ -150,6 +150,28 @@ const CompanySection = ({
     }
   }, [formData.companyName, selectedCompany, companyState, setCompanyState]);
 
+  // Auto-fill Fund defaults
+  useEffect(() => {
+    if (formData.investmentTypeCode === 6 && mode === 'nueva') {
+      (async () => {
+        try {
+          const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
+          
+          if (monedaRes.success) {
+            // Always enforce these defaults for Fund, even if company was selected
+            handleChange({ target: { name: 'issuerTypeCode', value: '0' } });
+            handleChange({ target: { name: 'sectorGICS', value: '66666666' } });
+            handleChange({ target: { name: 'riskCountry', value: '[Fund]' } });
+            handleChange({ target: { name: 'issueCurrency', value: monedaRes.data.nombre } });
+            handleChange({ target: { name: 'riskCurrency', value: monedaRes.data.nombre } });
+          }
+        } catch (error) {
+          console.error('Error setting Fund defaults:', error);
+        }
+      })();
+    }
+  }, [formData.investmentTypeCode, mode, formData.moneda, formData.companyName, handleChange]);
+  
   // Cerrar sugerencias al hacer click fuera
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -371,7 +393,7 @@ const CompanySection = ({
             onChange={handleCompanyNameChange}
             onBlur={handleBlur}
             onFocus={handleFocus}
-            disabled={isFieldReadOnly('companyName')}
+            disabled={isFieldReadOnly('companyName') || [3, 4, 5].includes(formData.investmentTypeCode)}
             error={!!getError('companyName')}
             helperText={getError('companyName') || getStateMessage()}
             required
@@ -502,7 +524,7 @@ const CompanySection = ({
             value={formData.issuerTypeCode}
             onChange={handleChange}
             options={options?.issuerTypes || []}
-            readOnly={isFieldReadOnly('issuerTypeCode') || !areRelatedFieldsEditable()}
+            readOnly={isFieldReadOnly('issuerTypeCode') || !areRelatedFieldsEditable() || [3, 4, 5, 6].includes(formData.investmentTypeCode)}
             error={getError('issuerTypeCode')}
             width="md"
             helperText={companyState === COMPANY_STATES.SELECTED ? 'Auto-poblado de compania' : undefined}
@@ -519,7 +541,7 @@ const CompanySection = ({
             value={formData.sectorGICS}
             onChange={handleChange}
             options={options?.sectoresGICS || []}
-            readOnly={isFieldReadOnly('sectorGICS') || !areRelatedFieldsEditable()}
+            readOnly={isFieldReadOnly('sectorGICS') || !areRelatedFieldsEditable() || [3, 4, 5, 6].includes(formData.investmentTypeCode)}
             error={getError('sectorGICS')}
             width="flex1"
             helperText={companyState === COMPANY_STATES.SELECTED ? 'Auto-poblado de compania' : undefined}

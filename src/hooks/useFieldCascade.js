@@ -84,11 +84,11 @@ const useFieldCascade = (setFields, companyState = null) => {
         companyName: companyName || company.companyName,
       };
 
-      if (company.issuerTypeCode) {
-        updates.issuerTypeCode = company.issuerTypeCode;
+      if (company.issuerTypeCode !== undefined && company.issuerTypeCode !== null) {
+        updates.issuerTypeCode = String(company.issuerTypeCode);
       }
-      if (company.sectorGICS) {
-        updates.sectorGICS = company.sectorGICS;
+      if (company.sectorGICS !== undefined && company.sectorGICS !== null) {
+        updates.sectorGICS = String(company.sectorGICS);
       }
 
       setFields(updates);

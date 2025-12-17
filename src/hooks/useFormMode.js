@@ -104,7 +104,7 @@ const calculateCurrentStep = (formData, mode) => {
   return FORM_STEPS.COMPLETE;
 };
 
-const useFormMode = (initialMode = null, formData = {}) => {
+const useFormMode = (initialMode = null, formData = {}, fieldConfig = null) => {
   const [mode, setMode] = useState(initialMode);
 
   // Obtener configuracion del modo actual
@@ -139,8 +139,17 @@ const useFormMode = (initialMode = null, formData = {}) => {
 
   // Verificar si un campo es de solo lectura
   const isFieldReadOnly = useCallback((fieldName) => {
+    // First check if field has readOnly in its config
+    if (fieldConfig) {
+      for (const section of Object.values(fieldConfig.sections || {})) {
+        const field = section.fields?.[fieldName];
+        if (field?.readOnly === true) {
+          return true;
+        }
+      }
+    }
     return !isFieldEditable(fieldName);
-  }, [isFieldEditable]);
+  }, [isFieldEditable, fieldConfig]);
 
   // Determinar paso actual (solo para modo NUEVA)
   const getCurrentStep = useCallback((formData) => {

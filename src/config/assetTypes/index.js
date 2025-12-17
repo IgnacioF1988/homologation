@@ -17,6 +17,8 @@ import { FIXED_INCOME_CONFIG } from './fixedIncome.config';
 import { DERIVATIVE_CONFIG } from './derivative.config';
 import { FUND_CONFIG } from './fund.config';
 import { CASH_CONFIG } from './cash.config';
+import { PAYABLE_RECEIVABLE_CONFIG } from './payableReceivable.config';
+import { BANK_DEBT_CONFIG } from './bankDebt.config';
 import { TRANSVERSAL_SECTIONS, evaluateCondition } from './_base';
 
 // ===========================================
@@ -27,6 +29,8 @@ const ASSET_TYPE_REGISTRY = {
   1: FIXED_INCOME_CONFIG,  // Fixed Income
   2: EQUITY_CONFIG,        // Equity
   3: CASH_CONFIG,          // Cash
+  4: PAYABLE_RECEIVABLE_CONFIG, // payable and receivable
+  5: BANK_DEBT_CONFIG, // Bank Debt
   6: FUND_CONFIG,          // Fund
   7: DERIVATIVE_CONFIG,    // Derivative
 };
@@ -137,6 +141,8 @@ export { FIXED_INCOME_CONFIG } from './fixedIncome.config';
 export { CASH_CONFIG } from './cash.config';
 export { DERIVATIVE_CONFIG } from './derivative.config';
 export { FUND_CONFIG } from './fund.config';
+export { PAYABLE_RECEIVABLE_CONFIG } from './payableReceivable.config';
+export { BANK_DEBT_CONFIG } from './bankDebt.config';
 
 export default {
   getAssetTypeConfig,

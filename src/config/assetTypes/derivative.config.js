@@ -44,7 +44,7 @@ export const DERIVATIVE_CONFIG = {
     hasParametersDE: true,
     steps: [
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
-      { id: 2, requiredFields: ['companyName'] },
+      { id: 2, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
       { id: 3, requiredFields: ['subId'] },
     ],
   },
@@ -107,6 +107,20 @@ export const DERIVATIVE_CONFIG = {
       // Campos de compania (todos explicitos, con sectorGICS)
       fields: {
         ...createCompanyFields({ includeSectorGICS: true }),
+        issuerTypeCode: {
+            name: 'issuerTypeCode',
+            label: 'Issuer_Type_Code',
+            type: 'select',
+            optionsKey: 'issuerTypes',
+            required: true,
+          },
+        sectorGICS: {
+          name: 'sectorGICS',
+          label: 'Sector_GICS',
+          type: 'select',
+          optionsKey: 'sectoresGICS',
+          required: true,
+        },
       },
     },
 

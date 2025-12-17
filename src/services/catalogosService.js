@@ -53,7 +53,7 @@ async function getCatalogoById(nombre, id) {
 const catalogFieldConfig = {
   paises: { valueField: 'code', labelField: 'ShortName', fallbackLabel: 'Description' },
   monedas: { valueField: 'nombre', labelField: 'descripcion' },
-  sectoresGICS: { valueField: 'code', labelField: 'GICS_Sector_ShortName', unique: true },
+  sectoresGICS: { valueField: 'code', labelField: 'nombre'},
   dataSources: { valueField: 'codigo', labelField: 'nombre' }, // BBG, MANUAL, etc.
   investmentTypes: { valueField: 'codigo', labelField: 'nombre' }, // EQ, FI, etc.
   // Resto usa configuración por defecto (id, nombre)

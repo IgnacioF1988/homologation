@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b)",
+      "Bash(dir /s /b c:Usersifuenteshomologation)",
+      "Bash(dir /b \"c:\\Users\\ifuentes\\homologation\")",
+      "Bash(dir:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(npm start)",
+      "Bash(find:*)",
+      "Bash(tasklist:*)",
+      "Bash(powershell:*)",
+      "Bash(node -e:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "mcp__sqlserver-moneda__list_procedures",
+      "mcp__sqlserver-moneda__query",
+      "mcp__sqlserver-moneda__get_sp_definition",
+      "mcp__sqlserver-moneda__execute",
+      "mcp__sqlserver-moneda__describe_object",
+      "mcp__sqlserver-moneda__exec_sp",
+      "Bash(findstr:*)",
+      "mcp__sqlserver-moneda__list_tables",
+      "mcp__sqlserver-moneda__list_views",
+      "Bash(rm:*)",
+      "mcp__sqlserver-moneda__list_databases",
+      "mcp__sqlserver-moneda__switch_database",
+      "mcp__sqlserver-moneda__table_row_counts",
+      "Bash(curl:*)",
+      "Bash(move \"C:\\Users\\ifuentes\\homologation\\execute_fix.js\" \"C:\\Users\\ifuentes\\homologation\\server\\execute_fix.js\")",
+      "Bash(node execute_fix.js:*)",
+      "Bash(node:*)",
+      "Bash(mkdir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

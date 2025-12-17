@@ -52,7 +52,7 @@ export const FUND_CONFIG = {
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       // Paso 2: Identificadores (todos opcionales, siempre pasa)
       { id: 2, requiredFields: [] },
-      { id: 3, requiredFields: ['companyName'] },
+      { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
       { id: 5, requiredFields: ['investmentFundType'] },
     ],
@@ -156,6 +156,30 @@ export const FUND_CONFIG = {
       // Campos de compania (todos explicitos, con sectorGICS)
       fields: {
         ...createCompanyFields({ includeSectorGICS: true }),
+        companyName: {
+          name: 'companyName',
+          label: 'Nombre Compania',
+          type: 'company-autocomplete',
+          required: true,
+        },
+        issuerTypeCode: {
+            name: 'issuerTypeCode',
+            label: 'Issuer_Type_Code',
+            type: 'select',
+            optionsKey: 'issuerTypes',
+            required: true,
+            readOnly: true,
+            defaultValue: '0',
+          },
+        sectorGICS: {
+          name: 'sectorGICS',
+          label: 'Sector_GICS',
+          type: 'select',
+          optionsKey: 'sectoresGICS',
+          required: true,
+          readOnly: true,
+          defaultValue: '66666666',
+        },
       },
     },
 
@@ -167,23 +191,54 @@ export const FUND_CONFIG = {
       title: 'Definicion Geografica',
       icon: 'PublicIcon',
       step: 4,
-
+    
       groups: [
         {
           id: 'geography',
-          fields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency', 'sectorChileTypeCode'],
+          fields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'],
         },
       ],
-
-      // Campos de geografia (todos explicitos, sin emisionNacional)
+    
       fields: {
-        ...createGeographyFields({
-          includeEmisionNacional: false,
-          includeSectorChile: true,
-        }),
+        issueCountry: {
+          name: 'issueCountry',
+          label: 'Issue_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+        },
+        riskCountry: {
+          name: 'riskCountry',
+          label: 'Risk_Country',
+          type: 'select',
+          optionsKey: 'paises',
+          required: true,
+          readOnly: true, // Auto-filled to [Fund]
+        },
+        issueCurrency: {
+          name: 'issueCurrency',
+          label: 'Issue_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true, // Auto-filled from queue
+        },
+        riskCurrency: {
+          name: 'riskCurrency',
+          label: 'Risk_Currency',
+          type: 'select',
+          optionsKey: 'monedas',
+          required: true,
+          readOnly: true, // Auto-filled from queue
+        },
       },
-
-      alerts: [],
+    
+      alerts: [
+        {
+          severity: 'info',
+          message: 'Para Fondos: Risk Country = [Fund], currencies = moneda de cola (auto-completados).',
+        },
+      ],
     },
 
     // -----------------------------------------

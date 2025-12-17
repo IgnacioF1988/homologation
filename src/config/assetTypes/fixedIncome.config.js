@@ -48,7 +48,7 @@ export const FIXED_INCOME_CONFIG = {
     steps: [
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       { id: 2, requiredFields: ['publicDataSource'], conditionalFields: { condition: 'isBBG', fields: ['isin'] } },
-      { id: 3, requiredFields: ['companyName'] },
+      { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
       { id: 5, requiredFields: ['couponTypeCode', 'yieldType', 'yieldSource', 'perpetuidad', 'rendimiento', 'couponFrequency'], conditionalFields: { condition: 'isYieldSourceBBG', fields: ['coco', 'callable', 'sinkable'] } },
     ],
@@ -124,7 +124,7 @@ export const FIXED_INCOME_CONFIG = {
         isin: {
           ...createIdentifierField('isin'),
           // Para FI + BBG: ISIN es OBLIGATORIO
-          requiredWhen: { field: 'publicDataSource', matches: ['BBG', 'Bloomberg', '3', '14'] },
+          requiredWhen: { field: 'publicDataSource', matches: ['BBG', 'Bloomberg', '14'] },
           priorityIdentifier: true, // Este es el identificador principal para FI
         },
         tickerBBG: {
@@ -138,7 +138,7 @@ export const FIXED_INCOME_CONFIG = {
 
       alerts: [
         {
-          condition: { field: 'publicDataSource', matches: ['BBG', 'Bloomberg', '3', '14'] },
+          condition: { field: 'publicDataSource', matches: ['BBG', 'Bloomberg', '14'] },
           severity: 'info',
           message: 'Para Bloomberg + Fixed Income: ISIN es OBLIGATORIO',
         },
@@ -157,13 +157,19 @@ export const FIXED_INCOME_CONFIG = {
       // Campos de compania (todos explicitos)
       fields: {
         ...createCompanyFields({ includeSectorGICS: true }),
-        // Para FI, issueTypeCode es relevante
-        issueTypeCode: {
-          name: 'issueTypeCode',
-          label: 'Issue_Type_Code',
+        issuerTypeCode: {
+            name: 'issuerTypeCode',
+            label: 'Issuer_Type_Code',
+            type: 'select',
+            optionsKey: 'issuerTypes',
+            required: true,
+          },
+        sectorGICS: {
+          name: 'sectorGICS',
+          label: 'Sector_GICS',
           type: 'select',
-          optionsKey: 'issueTypes',
-          required: false,
+          optionsKey: 'sectoresGICS',
+          required: true,
         },
       },
     },
@@ -183,6 +189,52 @@ export const FIXED_INCOME_CONFIG = {
           includeEmisionNacional: true,
           includeSectorChile: true,
         }),
+        issueCountry: {
+            name: 'issueCountry',
+            label: 'Issue_Country',
+            type: 'select',
+            optionsKey: 'paises',
+            required: true,
+          },
+          riskCountry: {
+            name: 'riskCountry',
+            label: 'Risk_Country',
+            type: 'select',
+            optionsKey: 'paises',
+            required: true,
+            cascade: ['sectorChileTypeCode'],
+            cascadeCondition: { notEquals: 'CL' },
+          },
+          issueCurrency: {
+            name: 'issueCurrency',
+            label: 'Issue_Currency',
+            type: 'select',
+            optionsKey: 'monedas',
+            required: true,
+          },
+          riskCurrency: {
+            name: 'riskCurrency',
+            label: 'Risk_Currency',
+            type: 'select',
+            optionsKey: 'monedas',
+            required: true,
+          },
+          emisionNacional: {
+            name: 'emisionNacional',
+            label: 'Emision_Nacional',
+            type: 'select',
+            optionsKey: 'booleanValues',
+            visibleWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] },
+            requiredWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] }
+          },
+          sectorChileTypeCode: {
+            name: 'sectorChileTypeCode',
+            label: 'Sector_Chile_Type_Code',
+            type: 'select',
+            optionsKey: 'sectorChile',
+            visibleWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] },
+            requiredWhen: { or: [{ field: 'riskCountry', equals: 'CL' }, { field: 'issueCountry', equals: 'CL' }] },
+          },
       },
     },
 
@@ -202,7 +254,7 @@ export const FIXED_INCOME_CONFIG = {
         },
         {
           id: 'bbgFields',
-          visibleWhen: { field: 'yieldSource', equals: 'BBG' },
+          visibleWhen: { field: 'yieldSource', equals: '1' },
           fields: ['coco', 'callable', 'sinkable', 'yasYldFlag'],
           alertMessage: 'Complete los campos Bloomberg:',
         },
@@ -234,7 +286,7 @@ export const FIXED_INCOME_CONFIG = {
           optionsKey: 'yieldSources',
           required: true,
           cascade: ['coco', 'callable', 'sinkable', 'yasYldFlag'],
-          cascadeCondition: { notEquals: 'BBG' },
+          cascadeCondition: { notEquals: '1' },
         },
 
         perpetuidad: {
@@ -269,8 +321,6 @@ export const FIXED_INCOME_CONFIG = {
           label: 'CoCo',
           type: 'select',
           optionsKey: 'booleanValues',
-          visibleWhen: { field: 'yieldSource', equals: 'BBG' },
-          requiredWhen: { field: 'yieldSource', equals: 'BBG' },
         },
 
         callable: {
@@ -278,8 +328,6 @@ export const FIXED_INCOME_CONFIG = {
           label: 'Callable',
           type: 'select',
           optionsKey: 'booleanValues',
-          visibleWhen: { field: 'yieldSource', equals: 'BBG' },
-          requiredWhen: { field: 'yieldSource', equals: 'BBG' },
         },
 
         sinkable: {
@@ -287,15 +335,12 @@ export const FIXED_INCOME_CONFIG = {
           label: 'Sinkable',
           type: 'select',
           optionsKey: 'booleanValues',
-          visibleWhen: { field: 'yieldSource', equals: 'BBG' },
-          requiredWhen: { field: 'yieldSource', equals: 'BBG' },
         },
 
         yasYldFlag: {
           name: 'yasYldFlag',
           label: 'YAS_YLD_FLAG',
           type: 'number',
-          visibleWhen: { field: 'yieldSource', equals: 'BBG' },
         },
       },
 

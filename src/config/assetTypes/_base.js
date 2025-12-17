@@ -71,6 +71,11 @@ export const TRANSVERSAL_SECTIONS = {
  */
 export const evaluateCondition = (condition, formData) => {
   if (!condition) return true;
+  
+  // { or: [{ field: 'x', equals: 'val1' }, { field: 'y', equals: 'val2' }] }
+  if (condition.or) {
+    return condition.or.some(c => evaluateCondition(c, formData));
+  }
 
   // { field: 'x', equals: 'value' }
   if (condition.field && condition.equals !== undefined) {
@@ -247,7 +252,7 @@ export const calculateVisibilityFromConfig = (flowConfig, formData, mode, hasPre
     visibility.definition = config.hasDefinition && (isComplete || stepNum >= 4);
 
     // Parametros especificos (FI, DE) - visibles cuando paso 3 completo
-    visibility.parametersFI = config.hasParametersFI && (isComplete || stepNum >= 4);
+    visibility.parametersFI = config.hasParametersFI && (isComplete || stepNum >= 5);
     visibility.parametersDE = config.hasParametersDE && (isComplete || stepNum >= 4);
 
     // Parametros genericos (Fund, Cash, etc.) - visibles cuando paso 4 completo

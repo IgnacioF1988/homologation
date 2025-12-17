@@ -52,7 +52,7 @@ export const CASH_CONFIG = {
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       // Paso 2: Identificadores (todos opcionales, siempre pasa)
       { id: 2, requiredFields: [] },
-      { id: 3, requiredFields: ['companyName'] },
+      { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
       { id: 5, requiredFields: ['cashTypeCode'] },
     ],
@@ -156,6 +156,32 @@ export const CASH_CONFIG = {
       // Campos de compania (todos explicitos, sin sectorGICS para Cash)
       fields: {
         ...createCompanyFields({ includeSectorGICS: false }),
+        companyName: {
+          name: 'companyName',
+          label: 'Nombre Compania',
+          type: 'text',
+          required: true,
+          readOnly: true,  
+          defaultValue: '[CASH & EQUIV.]',
+        },
+        issuerTypeCode: {
+            name: 'issuerTypeCode',
+            label: 'Issuer_Type_Code',
+            type: 'select',
+            optionsKey: 'issuerTypes',
+            required: true,
+            readOnly: true,
+            defaultValue: '0',
+          },
+        sectorGICS: {
+          name: 'sectorGICS',
+          label: 'Sector_GICS',
+          type: 'select',
+          optionsKey: 'sectoresGICS',
+          required: true,
+          readOnly: true,
+          defaultValue: '88888888',
+        },
       },
     },
 
@@ -181,6 +207,40 @@ export const CASH_CONFIG = {
           includeEmisionNacional: false,
           includeSectorChile: true,
         }),
+        issueCountry: {
+        name: 'issueCountry',
+        label: 'Issue_Country',
+        type: 'select',
+        optionsKey: 'paises',
+        required: true,
+        readOnly: true,
+        defaultValue: '[Cash & Eq]',
+      },
+      riskCountry: {
+        name: 'riskCountry',
+        label: 'Risk_Country',
+        type: 'select',
+        optionsKey: 'paises',
+        required: true,
+        readOnly: true,  
+        defaultValue: '[Cash & Eq]',
+      },
+      issueCurrency: {
+        name: 'issueCurrency',
+        label: 'Issue_Currency',
+        type: 'select',
+        optionsKey: 'monedas',
+        required: true,
+        readOnly: true,  // ADD THIS
+      },
+      riskCurrency: {
+        name: 'riskCurrency',
+        label: 'Risk_Currency',
+        type: 'select',
+        optionsKey: 'monedas',
+        required: true,
+        readOnly: true,  // ADD THIS
+      },
       },
 
       alerts: [],

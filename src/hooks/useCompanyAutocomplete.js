@@ -135,7 +135,7 @@ const useCompanyAutocomplete = (formData, setFields, mode) => {
   const handleCompanyBlur = useCallback(() => {
     // Delay para permitir click en sugerencia
     setTimeout(() => {
-      if (showSuggestions && suggestions.length === 0 && formData.companyName) {
+      if (showSuggestions && suggestions.length === 0 && formData.companyName && !selectedCompany) {
         // No hay sugerencias y hay texto -> marcar como nueva
         confirmAsNewCompany();
       }

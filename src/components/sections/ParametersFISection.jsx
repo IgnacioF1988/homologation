@@ -13,6 +13,7 @@ import AccountBalanceOutlinedIcon from '@mui/icons-material/AccountBalanceOutlin
 import { FormSection, FormRow } from '../layout';
 import { SelectField, TextField } from '../fields';
 import useAssetTypeConfig from '../../hooks/useAssetTypeConfig';
+import { evaluateCondition } from '../../config/assetTypes/_base';
 
 const ParametersFISection = ({
   formData,
@@ -31,8 +32,10 @@ const ParametersFISection = ({
   } = useAssetTypeConfig(formData.investmentTypeCode, formData);
 
   // Campos BBG visibles segun config (o fallback a yieldSource === 'BBG')
-  const showBBGFields = isFieldVisible('coco', formData);
-
+  const showBBGFields = evaluateCondition(
+    { field: 'yieldSource', matches: ['1', 1, 'BBG', 'Bloomberg'] },
+    formData
+  );
   // Obtener error de un campo
   const getError = (fieldName) => {
     return formErrors && formErrors[fieldName] ? formErrors[fieldName] : null;
