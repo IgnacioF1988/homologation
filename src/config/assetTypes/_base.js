@@ -39,6 +39,8 @@
  * }
  */
 
+import { trace, TRACE } from '../../utils/tracing';
+
 // ===========================================
 // SECCIONES TRANSVERSALES - No varian por tipo
 // ===========================================
@@ -139,13 +141,38 @@ export const DEFAULT_FLOW_CONFIG = {
  * @returns {number|string} - Paso actual o 'complete'
  */
 export const calculateStepFromConfig = (flowConfig, formData, isBBGFn) => {
+  trace.enter(TRACE.FLOW, 'calculateStepFromConfig', {
+    investmentType: formData.investmentTypeCode,
+    totalSteps: flowConfig?.steps?.length || DEFAULT_FLOW_CONFIG.steps.length,
+  });
+
   const steps = flowConfig?.steps || DEFAULT_FLOW_CONFIG.steps;
 
   for (const step of steps) {
+    trace.flow(`Evaluando paso ${step.id}`, {
+      requiredFields: step.requiredFields,
+      conditionalFields: step.conditionalFields,
+    });
+
     // Verificar campos requeridos del paso
     for (const field of step.requiredFields || []) {
       if (!formData[field]) {
+        trace.validation(`❌ Campo requerido vacío: ${field}`, {
+          step: step.id,
+          field,
+          currentValue: formData[field],
+        });
+        trace.exit(TRACE.FLOW, 'calculateStepFromConfig', {
+          currentStep: step.id,
+          reason: `Missing required field: ${field}`
+        });
         return step.id;
+      } else {
+        trace.validation(`✅ Campo requerido completo: ${field}`, {
+          step: step.id,
+          field,
+          value: formData[field],
+        });
       }
     }
 
@@ -159,18 +186,56 @@ export const calculateStepFromConfig = (flowConfig, formData, isBBGFn) => {
         conditionMet = isBBGFn(formData.publicDataSource);
       } else if (condition === 'isChile') {
         conditionMet = formData.riskCountry === 'CL';
+      } else if (condition === 'isYieldSourceBBG') {
+        // FIX CRITICO: Condición para Fixed Income - evaluar si yieldSource es Bloomberg
+        // '1' es el valor del catálogo para Bloomberg
+        conditionMet = formData.yieldSource === '1';
       }
+
+      trace.validation(`Condición '${condition}': ${conditionMet}`, {
+        step: step.id,
+        condition,
+        conditionMet,
+        relevantData: {
+          publicDataSource: formData.publicDataSource,
+          riskCountry: formData.riskCountry,
+          yieldSource: formData.yieldSource,
+        },
+      });
 
       if (conditionMet) {
         for (const field of fields || []) {
           if (!formData[field]) {
+            trace.validation(`❌ Campo condicional vacío: ${field}`, {
+              step: step.id,
+              field,
+              condition,
+            });
+            trace.exit(TRACE.FLOW, 'calculateStepFromConfig', {
+              currentStep: step.id,
+              reason: `Missing conditional field: ${field}`
+            });
             return step.id;
+          } else {
+            trace.validation(`✅ Campo condicional completo: ${field}`, {
+              step: step.id,
+              field,
+            });
           }
         }
+      } else {
+        trace.validation(`⏭️ Condición no cumplida, skipping campos condicionales`, {
+          step: step.id,
+          condition,
+          fields,
+        });
       }
     }
+
+    trace.flow(`✅ Paso ${step.id} completo`);
   }
 
+  trace.exit(TRACE.FLOW, 'calculateStepFromConfig', { currentStep: 'complete' });
   return 'complete';
 };
 
@@ -184,6 +249,12 @@ export const calculateStepFromConfig = (flowConfig, formData, isBBGFn) => {
  * @returns {Object} - Visibilidad de cada seccion
  */
 export const calculateVisibilityFromConfig = (flowConfig, formData, mode, hasPredecesor, isBBGFn = null) => {
+  trace.enter(TRACE.FLOW, 'calculateVisibilityFromConfig', {
+    mode,
+    investmentType: formData.investmentTypeCode,
+    hasPredecesor,
+  });
+
   const config = flowConfig || DEFAULT_FLOW_CONFIG;
 
   // Base: secciones transversales siempre visibles
@@ -199,32 +270,41 @@ export const calculateVisibilityFromConfig = (flowConfig, formData, mode, hasPre
   };
 
   // Sin modo = solo transversales
-  if (!mode) return visibility;
+  if (!mode) {
+    trace.flow('Sin modo especificado, solo secciones transversales visibles');
+    trace.exit(TRACE.FLOW, 'calculateVisibilityFromConfig', visibility);
+    return visibility;
+  }
 
   // Reestructuracion
   if (mode === 'reestructuracion') {
+    trace.flow('Modo REESTRUCTURACION', { hasPredecesor });
     visibility.identifiers = hasPredecesor;
     visibility.company = hasPredecesor;
     visibility.definition = hasPredecesor && config.hasDefinition;
     visibility.parametersFI = hasPredecesor && config.hasParametersFI;
     visibility.parametersDE = hasPredecesor && config.hasParametersDE;
     visibility.parameters = hasPredecesor && config.hasParameters;
+    trace.exit(TRACE.FLOW, 'calculateVisibilityFromConfig', visibility);
     return visibility;
   }
 
   // Exacta o Parcial
   if (mode === 'exacta' || mode === 'parcial') {
+    trace.flow(`Modo ${mode.toUpperCase()} - todas las secciones visibles`);
     visibility.identifiers = true;
     visibility.company = true;
     visibility.definition = config.hasDefinition;
     visibility.parametersFI = config.hasParametersFI;
     visibility.parametersDE = config.hasParametersDE;
     visibility.parameters = config.hasParameters;
+    trace.exit(TRACE.FLOW, 'calculateVisibilityFromConfig', visibility);
     return visibility;
   }
 
   // Nueva - flujo en cascada
   if (mode === 'nueva') {
+    trace.flow('Modo NUEVA - calculando visibilidad por pasos');
     const paso1Completado = !!formData.investmentTypeCode && !!formData.nameInstrumento;
 
     visibility.identifiers = true;
@@ -236,31 +316,61 @@ export const calculateVisibilityFromConfig = (flowConfig, formData, mode, hasPre
     const isComplete = currentStep === 'complete';
     const stepNum = typeof currentStep === 'number' ? currentStep : Infinity;
 
+    trace.flow('Paso actual calculado', {
+      currentStep,
+      isComplete,
+      stepNum,
+      paso1Completado,
+    });
+
     // Company visible SOLO si paso 2 esta COMPLETO (incluyendo condicionales)
     if (config.requiresPublicDataSource) {
       // Para tipos que requieren publicDataSource (EQ, FI)
       // currentStep >= 3 significa que paso 2 ya fue validado exitosamente
       visibility.company = isComplete || stepNum >= 3;
+      trace.flow('Company visibility (con publicDataSource)', {
+        visible: visibility.company,
+        requiresPublicDataSource: true,
+      });
     } else {
       // Para tipos sin publicDataSource (Fund, Cash, DE)
       // Paso 1 es solo investmentTypeCode + nameInstrumento
       visibility.company = paso1Completado;
+      trace.flow('Company visibility (sin publicDataSource)', {
+        visible: visibility.company,
+        paso1Completado,
+      });
     }
 
     // Definition visible SOLO si paso 3 esta COMPLETO
     // currentStep >= 4 significa que paso 3 (company) ya fue validado exitosamente
     visibility.definition = config.hasDefinition && (isComplete || stepNum >= 4);
+    trace.flow('Definition visibility', {
+      visible: visibility.definition,
+      hasDefinition: config.hasDefinition,
+    });
 
     // Parametros especificos (FI, DE) - visibles cuando paso 3 completo
     visibility.parametersFI = config.hasParametersFI && (isComplete || stepNum >= 5);
     visibility.parametersDE = config.hasParametersDE && (isComplete || stepNum >= 4);
+    trace.flow('Parameters visibility', {
+      parametersFI: visibility.parametersFI,
+      parametersDE: visibility.parametersDE,
+    });
 
     // Parametros genericos (Fund, Cash, etc.) - visibles cuando paso 4 completo
     visibility.parameters = config.hasParameters && (isComplete || stepNum >= 5);
+    trace.flow('Generic Parameters visibility', {
+      parameters: visibility.parameters,
+      hasParameters: config.hasParameters,
+    });
 
+    trace.flow('Secciones visibles (modo nueva)', visibility);
+    trace.exit(TRACE.FLOW, 'calculateVisibilityFromConfig', visibility);
     return visibility;
   }
 
+  trace.exit(TRACE.FLOW, 'calculateVisibilityFromConfig', visibility);
   return visibility;
 };
 

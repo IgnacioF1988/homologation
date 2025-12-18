@@ -56,6 +56,7 @@ import { api } from '../services/api';
 
 // Utils - Funciones de mapeo compartidas
 import { mapRegistroCompleto, mapRegistroSinMonedas } from '../utils/instrumentMapping';
+import { trace, TRACE } from '../utils/tracing';
 
 // Styles
 import { formContainer } from '../styles/formStyles';
@@ -192,21 +193,21 @@ const InstrumentForm = forwardRef(({
   // Consolidado: aplica defaults estáticos + monedas dinámicas en un solo lugar
   // =============================================================================
   useEffect(() => {
-    console.log('[AUTO-DEFAULTS] useEffect ejecutado:', {
+    trace.enter(TRACE.DEFAULTS, 'AUTO-DEFAULTS useEffect', {
       mode,
       investmentTypeCode: formData.investmentTypeCode,
-      moneda: formData.moneda
+      moneda: formData.moneda,
     });
 
     // QUICK FIX: Solo bloquear si NO hay investmentTypeCode
     if (!formData.investmentTypeCode) {
-      console.log('[AUTO-DEFAULTS] Saliendo - no hay investmentTypeCode');
+      trace.defaults('⏭️ Skip - no investmentTypeCode');
       return;
     }
 
     // No sobrescribir datos en modo exacta/parcial
     if (mode === 'exacta' || mode === 'parcial') {
-      console.log('[AUTO-DEFAULTS] Saliendo - modo exacta/parcial, no sobrescribir');
+      trace.defaults(`⏭️ Skip - modo ${mode}, no sobrescribir`);
       return;
     }
 
@@ -216,60 +217,64 @@ const InstrumentForm = forwardRef(({
 
         // 1. SIEMPRE aplicar defaults estáticos del config (no depende de moneda)
         const staticDefaults = getDefaultValues();
-        console.log('[AUTO-DEFAULTS] Defaults del config:', staticDefaults);
+        trace.defaults('Defaults del config obtenidos', {
+          totalDefaults: Object.keys(staticDefaults).length,
+          fields: Object.keys(staticDefaults),
+          values: staticDefaults,
+        });
 
         Object.entries(staticDefaults).forEach(([fieldName, defaultValue]) => {
           // No sobrescribir campos que ya tienen valor
           if (!formData[fieldName] || formData[fieldName] === '') {
-            console.log(`[AUTO-DEFAULTS] Campo ${fieldName} vacío, aplicando default:`, defaultValue);
+            trace.defaults(`✅ Aplicando default: ${fieldName} = ${defaultValue}`);
             fieldsToApply[fieldName] = defaultValue;
           } else {
-            console.log(`[AUTO-DEFAULTS] Campo ${fieldName} ya tiene valor:`, formData[fieldName]);
+            trace.defaults(`⏭️ Skip ${fieldName}, ya tiene valor: ${formData[fieldName]}`);
           }
         });
 
         // 2. SI hay moneda, aplicar currencies (solo para tipos que lo necesitan)
         if ([3, 4, 5, 6, 7].includes(formData.investmentTypeCode) && formData.moneda) {
-          console.log('[AUTO-DEFAULTS] Obteniendo monedas de API para tipo:', formData.investmentTypeCode);
+          trace.defaults('Obteniendo monedas de API', { monedaId: formData.moneda });
+
           try {
             const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
 
             if (monedaRes.success) {
-              console.log('[AUTO-DEFAULTS] Moneda obtenida:', monedaRes.data.nombre);
+              trace.defaults('✅ Moneda obtenida de API', { nombre: monedaRes.data.nombre });
+
               if (!formData.issueCurrency && !fieldsToApply.issueCurrency) {
                 fieldsToApply.issueCurrency = monedaRes.data.nombre;
+                trace.defaults(`✅ issueCurrency = ${monedaRes.data.nombre}`);
               }
               if (!formData.riskCurrency && !fieldsToApply.riskCurrency) {
                 fieldsToApply.riskCurrency = monedaRes.data.nombre;
+                trace.defaults(`✅ riskCurrency = ${monedaRes.data.nombre}`);
               }
             }
           } catch (apiError) {
-            console.error('[AUTO-DEFAULTS] Error obteniendo moneda de API:', apiError);
+            trace.error(TRACE.DEFAULTS, 'Error obteniendo moneda de API', apiError);
           }
         }
 
         // 3. Aplicar todos en batch
         if (Object.keys(fieldsToApply).length > 0) {
-          console.log('[AUTO-DEFAULTS] Aplicando campos:', fieldsToApply);
+          trace.defaults('📝 Aplicando campos en batch', {
+            totalFields: Object.keys(fieldsToApply).length,
+            fields: fieldsToApply,
+          });
           setFields(fieldsToApply);
-
-          // DEBUG: Verificar inmediatamente después (próximo tick)
-          setTimeout(() => {
-            console.log('[AUTO-DEFAULTS-VERIFY] formData después de setFields:', {
-              companyName: formData.companyName,
-              issuerTypeCode: formData.issuerTypeCode,
-              sectorGICS: formData.sectorGICS,
-            });
-          }, 100);
         } else {
-          console.log('[AUTO-DEFAULTS] No hay campos para aplicar');
+          trace.defaults('⏭️ No hay campos para aplicar');
         }
+
       } catch (error) {
-        console.error('[AUTO-DEFAULTS] Error aplicando defaults:', error);
+        trace.error(TRACE.DEFAULTS, 'Error aplicando defaults', error);
       }
     };
 
     applyDefaults();
+    trace.exit(TRACE.DEFAULTS, 'AUTO-DEFAULTS useEffect');
   }, [formData.investmentTypeCode, mode, formData.moneda, getDefaultValues, setFields]);
 
   // =============================================================================

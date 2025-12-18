@@ -211,10 +211,15 @@ const useAssetTypeConfig = (investmentTypeCode, formData = {}) => {
     const section = config.sections?.[sectionId];
     if (!section?.alerts) return [];
 
-    return section.alerts.filter(alert => {
-      if (!alert.condition) return true;
-      return evaluateCondition(alert.condition, currentFormData);
-    });
+    return section.alerts
+      .filter(alert => {
+        if (!alert.condition) return true;
+        return evaluateCondition(alert.condition, currentFormData);
+      })
+      .map(alert => ({
+        ...alert,
+        id: crypto.randomUUID(), // Add unique ID to each alert
+      }));
   }, [config, formData]);
 
   // ===========================================

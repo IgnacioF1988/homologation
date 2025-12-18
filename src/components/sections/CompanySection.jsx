@@ -37,6 +37,10 @@ import { FormSection, FormRow } from '../layout';
 import { SelectField } from '../fields';
 import { api } from '../../services/api';
 import { colors } from '../../styles/theme';
+import {
+  isFieldReadOnly as checkFieldReadOnly,
+  areRelatedFieldsEditable as checkRelatedFieldsEditable,
+} from '../../utils/fieldValidations';
 
 // Estados de la compania (exportar para uso externo)
 export const COMPANY_STATES = {
@@ -223,9 +227,9 @@ const CompanySection = ({
 
     // Usar populateFromCompany para auto-poblar
     if (populateFromCompany) {
-      populateFromCompany(company, company.companyName);
+      populateFromCompany(company, company.companyName, formData.investmentTypeCode);
     }
-  }, [populateFromCompany, setCompanyState]);
+  }, [populateFromCompany, setCompanyState, formData.investmentTypeCode]);
 
   // Confirmar como compania nueva
   const handleConfirmNewCompany = useCallback(() => {
@@ -251,7 +255,7 @@ const CompanySection = ({
         lastVerifiedCompanyRef.current = company.companyName?.trim().toLowerCase() || null;
         // Auto-poblar campos
         if (populateFromCompany) {
-          populateFromCompany(company, company.companyName);
+          populateFromCompany(company, company.companyName, formData.investmentTypeCode);
         }
         return true;
       }
@@ -259,7 +263,7 @@ const CompanySection = ({
       console.error('Error verificando compania:', error);
     }
     return false;
-  }, [populateFromCompany, setCompanyState]);
+  }, [populateFromCompany, setCompanyState, formData.investmentTypeCode]);
 
   // Manejar blur del campo
   const handleBlur = useCallback(() => {
@@ -382,7 +386,7 @@ const CompanySection = ({
             onChange={handleCompanyNameChange}
             onBlur={handleBlur}
             onFocus={handleFocus}
-            disabled={isFieldReadOnly('companyName') || [3, 4, 5].includes(formData.investmentTypeCode)}
+            disabled={checkFieldReadOnly('companyName', formData.investmentTypeCode, null, mode)}
             error={!!getError('companyName')}
             helperText={getError('companyName') || getStateMessage()}
             required
@@ -513,7 +517,7 @@ const CompanySection = ({
             value={formData.issuerTypeCode}
             onChange={handleChange}
             options={options?.issuerTypes || []}
-            readOnly={isFieldReadOnly('issuerTypeCode') || !areRelatedFieldsEditable() || [3, 4, 5, 6].includes(formData.investmentTypeCode)}
+            readOnly={checkFieldReadOnly('issuerTypeCode', formData.investmentTypeCode, null, mode) || !checkRelatedFieldsEditable({ selectedCompany }, formData.investmentTypeCode)}
             error={getError('issuerTypeCode')}
             width="md"
             helperText={companyState === COMPANY_STATES.SELECTED ? 'Auto-poblado de compania' : undefined}
@@ -530,7 +534,7 @@ const CompanySection = ({
             value={formData.sectorGICS}
             onChange={handleChange}
             options={options?.sectoresGICS || []}
-            readOnly={isFieldReadOnly('sectorGICS') || !areRelatedFieldsEditable() || [3, 4, 5, 6].includes(formData.investmentTypeCode)}
+            readOnly={checkFieldReadOnly('sectorGICS', formData.investmentTypeCode, null, mode) || !checkRelatedFieldsEditable({ selectedCompany }, formData.investmentTypeCode)}
             error={getError('sectorGICS')}
             width="flex1"
             helperText={companyState === COMPANY_STATES.SELECTED ? 'Auto-poblado de compania' : undefined}

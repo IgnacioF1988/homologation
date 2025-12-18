@@ -31,9 +31,22 @@
       "Bash(move \"C:\\Users\\ifuentes\\homologation\\execute_fix.js\" \"C:\\Users\\ifuentes\\homologation\\server\\execute_fix.js\")",
       "Bash(node execute_fix.js:*)",
       "Bash(node:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(if not exist node_modules npm install)",
+      "mcp__filesystem__directory_tree",
+      "mcp__filesystem__list_directory",
+      "mcp__filesystem__read_text_file",
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__list_allowed_directories",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "playwright",
+    "exa",
+    "sqlserver-moneda",
+    "filesystem"
+  ]
 }

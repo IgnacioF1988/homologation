@@ -199,8 +199,8 @@ const GenericFormSection = ({
       {/* Alertas desde la configuracion */}
       {sectionAlerts.length > 0 && (
         <Box sx={{ mb: 2 }}>
-          {sectionAlerts.map((alert, idx) => (
-            <Alert key={idx} severity={alert.severity || 'info'} sx={{ py: 0.5, mb: 1 }}>
+          {sectionAlerts.map((alert) => (
+            <Alert key={alert.id} severity={alert.severity || 'info'} sx={{ py: 0.5, mb: 1 }}>
               {alert.message}
             </Alert>
           ))}

@@ -13,7 +13,7 @@ Documentación de los stored procedures que sincronizan datos entre `Inteligenci
 5. [Orquestador Principal](#orquestador-principal)
 6. [Comparación de Esquemas](#comparación-de-esquemas)
 7. [Limitaciones del Sync Actual](#limitaciones-del-sync-actual)
-8. [Análisis de Migración: _16Dic → Inteligencia_Producto_Dev](#análisis-de-migración-16dic--inteligencia_producto_dev)
+8. [Análisis de Versiones: Avances en _16Dic vs Base Actual](#análisis-de-versiones-avances-en-16dic-vs-base-actual)
 
 ---
 
@@ -996,23 +996,25 @@ WHEN MATCHED AND (
 
 ---
 
-## 🔀 Análisis de Migración: _16Dic → Inteligencia_Producto_Dev
+## 🔀 Análisis de Versiones: Avances en _16Dic vs Base Actual
 
-Esta sección analiza las diferencias funcionales entre `Inteligencia_Producto_Dev_16Dic` (versión anterior) e `Inteligencia_Producto_Dev` (versión actual) basándose en las funcionalidades documentadas en este análisis.
-
----
-
-### 📊 Resumen Ejecutivo
-
-La migración de `Inteligencia_Producto_Dev_16Dic` a `Inteligencia_Producto_Dev` representa una **evolución arquitectónica significativa** hacia:
-- **Mayor observabilidad**: Sistema de logging centralizado
-- **Integración con grafos**: Sincronización completa con BTFDS
-- **Versionado de procedimientos**: Migración a versión 2 (_v2) de SPs críticos
-- **Modelo temporal avanzado**: Bitemporal tracking para instrumentos
+Esta sección analiza las diferencias entre `Inteligencia_Producto_Dev_16Dic` (versión con mejoras experimentales) e `Inteligencia_Producto_Dev` (base estable en producción).
 
 ---
 
-### ✅ Funcionalidades GANADAS
+### 📊 Contexto
+
+**Situación actual**:
+- `Inteligencia_Producto_Dev` = **Base SEGURA** (backup estable, en producción)
+- `Inteligencia_Producto_Dev_16Dic` = **Versión con AVANCES** (mejoras experimentales desarrolladas)
+- **Decisión tomada**: Volver a la base segura, heredando solo los avances que funcionaron bien
+
+**Objetivo de este análisis**:
+Identificar qué funcionalidades desarrolladas en _16Dic vale la pena heredar a la base actual.
+
+---
+
+### 🔬 Avances Desarrollados en _16Dic (Candidatos para Heredar)
 
 #### 1. Sistema de Logging Centralizado (schema `logs`)
 
@@ -1034,17 +1036,21 @@ logs.Ejecucion_Metricas
 └─ Métricas de performance del proceso
 ```
 
-**Beneficios**:
+**Ventajas de heredar**:
 - Trazabilidad completa de ejecuciones ETL
 - Identificación rápida de fondos con problemas
 - Monitoreo de sincronización a grafos
-- Auditoría de errores y reintentosDocumentado en: Líneas 629-632, 588-589
+- Auditoría de errores y reintentos
+
+**Riesgo**: Complejidad adicional de mantenimiento
+
+**Documentado en**: Líneas 629-632, 588-589
 
 ---
 
 #### 2. Stored Procedures Versión 2 (_v2)
 
-**Procedimientos evolucionados**:
+**Procedimientos mejorados en _16Dic**:
 
 | Procedimiento v2 | Mejoras Documentadas | Ubicación |
 |------------------|---------------------|-----------|
@@ -1053,12 +1059,19 @@ logs.Ejecucion_Metricas
 | `staging.PNL_01_Dimensiones_v2` | Detección de instrumentos y monedas desde PNL | Líneas 145-150, 161-166 |
 | `process.Sync_PNL_To_Graph_v2` | Orquestador de sincronización a BTFDS con retry automático | Líneas 557-592 |
 
-**Características de versión 2**:
+**Mejoras en versión 2**:
 - Integración con sistema de logs (parámetro `@ID_Ejecucion`)
 - Manejo de estados en `logs.Ejecucion_Fondos`
 - Detección automática de entidades sin homologar
 - Envío a colas de MonedaHomologacion
 - Marcado de errores (`ERROR`, `ERROR_HOMOLOGACION`)
+
+**Ventajas de heredar**:
+- Mejor observabilidad y troubleshooting
+- Retry automático en caso de errores
+- Estados explícitos de procesamiento
+
+**Riesgo**: Dependencias con schema `logs.*` (debe heredarse junto)
 
 **Documentado en**: Líneas 90, 95, 145, 557
 
@@ -1393,273 +1406,300 @@ Proceso:
 
 ---
 
-### ❌ Funcionalidades PERDIDAS (o Deprecadas)
+### 🏠 Estado Actual de la Base (Inteligencia_Producto_Dev)
 
-#### 1. Stored Procedures Versión 1
+Esta sección describe lo que existe actualmente en la base estable en producción.
 
-**Procedimientos reemplazados**:
+#### 1. Stored Procedures Versión Original (sin sufijo _v2)
 
-Basándose en la existencia de versiones _v2, se infiere que existieron versiones anteriores sin sufijo que fueron **deprecadas**:
+**Procedimientos actuales en la base**:
 
-- `process.Process_Funds` → `process.Process_Funds_v2`
-- `staging.IPA_06_CrearDimensiones` → `staging.IPA_06_CrearDimensiones_v2`
-- `staging.PNL_01_Dimensiones` → `staging.PNL_01_Dimensiones_v2`
-- `process.Sync_PNL_To_Graph` → `process.Sync_PNL_To_Graph_v2`
+- `process.Process_Funds` (versión original)
+- `staging.IPA_06_CrearDimensiones` (versión original)
+- `staging.PNL_01_Dimensiones` (versión original)
+- `process.Sync_PNL_To_Graph` (versión original, si existe)
 
-**Implicaciones**:
-- Versiones v1 probablemente **NO** tenían integración con:
-  - Sistema de logs (parámetro `@ID_Ejecucion` ausente)
-  - Graph sync status tracking
-  - Retry automático
-- Posible pérdida de compatibilidad con procesos que llamaban versiones v1
+**Características**:
+- Sin integración con sistema de logs centralizado
+- Sin parámetro `@ID_Ejecucion`
+- Sin estados de sincronización (Graph_Sync_Status)
+- Sin retry automático
 
-**Evidencia documental**: Líneas 90, 95, 145, 557 (todas referencias a _v2)
+**Ventajas**:
+- Probados y estables
+- Menor complejidad operacional
+- Menor overhead de logging
 
----
-
-#### 2. Colas de Homologación Locales (sandbox local)
-
-**Tablas mencionadas como potencialmente legacy** (líneas 633-636):
-
-```
-sandbox.Fondos_Problema
-sandbox.Homologacion_Fondos (cola local - legacy)
-sandbox.Homologacion_Monedas (cola local - legacy)
-```
-
-**Posible migración**:
-```
-Inteligencia_Producto_Dev_16Dic.sandbox.Homologacion_Fondos
-    ↓ (deprecado)
-MonedaHomologacion.sandbox.colaFondos (nuevo sistema centralizado)
-
-Inteligencia_Producto_Dev_16Dic.sandbox.Homologacion_Monedas
-    ↓ (deprecado)
-MonedaHomologacion.sandbox.colaMonedas (nuevo sistema centralizado)
-```
-
-**Implicaciones**:
-- **Centralización**: Colas ahora viven en MonedaHomologacion (fuente única de verdad)
-- **Pérdida**: Colas locales en Inteligencia_Producto_Dev ya no se usan
-- **Ganancia**: Reducción de duplicación, mejor gobernanza de datos
-
-**Evidencia documental**: Líneas 633-636 (marcados implícitamente como legacy)
+**Limitaciones**:
+- Difícil troubleshooting
+- Sin trazabilidad detallada
+- Sin estados explícitos de procesamiento
 
 ---
 
-#### 3. Procesamiento Sin Logging
+#### 2. Ausencia de Schema `logs`
 
-**Antes** (_16Dic):
-- Sin tracking de `ID_Ejecucion`
-- Sin estados de fondos (PENDING, RUNNING, etc.)
-- Sin `Graph_Sync_Status`
-- Difícil troubleshooting y auditoría
+**Estado actual**:
+- NO existe `logs.Ejecuciones`
+- NO existe `logs.Ejecucion_Fondos`
+- NO existe `logs.Ejecucion_Metricas`
 
-**Ahora** (Inteligencia_Producto_Dev):
-- Logging completo en `logs.*`
+**Implicaciones**:
+- Sin tracking centralizado de ejecuciones
+- Sin estados PENDING/RUNNING/COMPLETED/ERROR
+- Auditoría limitada a logs de SQL Server
+
+---
+
+#### 3. Sync a BTFDS Básico (si existe)
+
+**Estado actual**:
+- Posiblemente versiones más simples de procedimientos de graph sync
+- Sin estrategias de actualización inteligentes (NEW/APPEND/CORRECTION/SKIP)
+- Sin modelo bitemporal en Instruments
+- Sin Canonical ID (SHA2_256)
+
+---
+
+#### 4. Modelo de Datos Tradicional
+
+**Características actuales**:
+- Tablas planas para relaciones (process.TBL_PNL, process.TBL_BMS_Exp)
+- Sin edges de grafos explícitos
+- Instrumentos sin histórico (point-in-time)
+- Sin valid_from/valid_to en modelo
+
+---
+
+#### 5. Colas Potencialmente Locales
+
+**Si existen** (líneas 633-636):
+```
+sandbox.Homologacion_Fondos (cola local)
+sandbox.Homologacion_Monedas (cola local)
+```
+
+**Características**:
+- Gestión local en Inteligencia_Producto_Dev
+- Posible duplicación con sistema centralizado
+
+---
+
+### 📊 Comparación: ¿Qué Tiene _16Dic que NO Tiene la Base?
+
+| Funcionalidad | Base Actual | _16Dic | Impacto |
+|--------------|-------------|---------|---------|
+| **Schema logs** | ❌ No existe | ✅ Completo | Alto - Observabilidad |
+| **SPs versión _v2** | ❌ Versión original | ✅ Con logging y retry | Alto - Confiabilidad |
+| **Graph sync avanzado** | ❌ Básico/ausente | ✅ 5 SPs con bitemporal | Alto - Análisis |
+| **Modelo bitemporal** | ❌ Point-in-time | ✅ valid + system time | Medio - Auditoría |
+| **Canonical ID** | ❌ No implementado | ✅ SHA2_256 | Medio - Identificación |
+| **Estrategias UPDATE** | ❌ No | ✅ NEW/APPEND/CORRECTION/SKIP | Medio - Performance |
+| **Locks concurrencia** | ❌ No | ✅ sp_getapplock | Bajo - Consistencia |
+| **Batch processing** | ❌ No configurable | ✅ Configurable | Medio - Performance |
+| **JSON series temporales** | ❌ No | ✅ En edges | Medio - Flexibilidad |
+| **Tracking evoluciones** | ❌ No | ✅ Branch_id, transformations | Medio - Genealogía |
+| **Staging evoluciones** | ❌ No | ✅ Tabla staging | Bajo - Carga batch |
+
+---
+
+### ✅ Recomendaciones: Qué Heredar de _16Dic
+
+#### 🔴 Prioridad ALTA (Heredar inmediatamente)
+
+**1. Sistema de Logging Centralizado (`logs.*`)**
+
+**Por qué**:
+- Crítico para observabilidad y troubleshooting
+- Bajo riesgo de implementación (schema independiente)
+- Alto valor para operaciones
+
+**Qué heredar**:
+```sql
+-- Crear schema
+CREATE SCHEMA logs;
+
+-- Tablas
+logs.Ejecuciones
+logs.Ejecucion_Fondos (con Graph_Sync_Status)
+logs.Ejecucion_Metricas
+```
+
+**Dependencias**: Ninguna
+
+---
+
+**2. Stored Procedures Versión _v2**
+
+**Por qué**:
+- Integración con logging
+- Retry automático
 - Estados explícitos
-- Trazabilidad end-to-end
 
-**Implicación**:
-- **Pérdida**: Simplicidad (menor overhead)
-- **Ganancia**: Observabilidad, auditabilidad, monitoreo
+**Qué heredar**:
+- `process.Process_Funds_v2`
+- `staging.IPA_06_CrearDimensiones_v2`
+- `staging.PNL_01_Dimensiones_v2`
+- `process.Sync_PNL_To_Graph_v2`
 
-**Evidencia documental**: Líneas 92, 562, 586-589, 629-632
+**Estrategia**: Migración gradual
+1. Copiar SPs _v2 a la base
+2. Probar en paralelo con versiones originales
+3. Cambiar llamadas a versiones _v2
+4. Deprecar versiones originales después de validación
 
----
-
-#### 4. Tabla `dimensionales.BD_Instrumentos` como Fuente Primaria
-
-**Posible cambio arquitectónico**:
-
-```
-Antes (_16Dic):
-BD_Instrumentos como fuente primaria de instrumentos
-    ↓
-Otros sistemas
-
-Ahora (Inteligencia_Producto_Dev):
-MonedaHomologacion.stock.instrumentos como fuente primaria
-    ↓ (trigger automático)
-BD_Instrumentos (copia de respaldo para compatibilidad legacy)
-```
-
-**Evidencia** (líneas 429-461):
-- Trigger `stock.trg_Instrumentos_SyncToSource` sincroniza **de MonedaHomologacion → BD_Instrumentos**
-- BD_Instrumentos ahora es **destino**, no fuente
-- Propósito: "Mantener la base legacy sincronizada" (línea 449)
-
-**Implicaciones**:
-- **Pérdida**: BD_Instrumentos ya no es master data
-- **Ganancia**: Modelo moderno en stock.instrumentos (49 cols vs 26), bitemporal, auditoría
-
-**Evidencia documental**: Líneas 429-461, 649-653
+**Dependencias**: Requiere schema `logs.*`
 
 ---
 
-#### 5. Sync Manual Sin Automatización
+**3. Orquestación con Retry Automático**
 
-**Antes** (_16Dic):
-- Posiblemente sync manual o ad-hoc entre sistemas
-- Sin orquestadores automáticos
+**Por qué**:
+- Resiliencia ante errores temporales
+- Reduce intervención manual
+- Mejora SLA de procesos ETL
 
-**Ahora** (Inteligencia_Producto_Dev):
-- Orquestador `Sync_PNL_To_Graph_v2` con retry automático
-- Estados de sincronización (`Graph_Sync_Status`)
-- Procesamiento batch configurable
+**Qué heredar**:
+- Lógica de retry en `Sync_PNL_To_Graph_v2`
+- Manejo de estados PENDING → RUNNING → COMPLETED/ERROR
+- Registro de errores en `Graph_Sync_Error`
 
-**Implicación**:
-- **Pérdida**: Control manual granular
-- **Ganancia**: Automatización, confiabilidad, escalabilidad
-
-**Evidencia documental**: Líneas 557-592
+**Dependencias**: Requiere logs.Ejecucion_Fondos
 
 ---
 
-### 🔄 Cambios de Modelo de Datos
+#### 🟡 Prioridad MEDIA (Evaluar beneficio vs costo)
 
-#### 1. De Flat Tables a Graph Database
+**4. Sincronización Avanzada a BTFDS**
 
-**Antes** (_16Dic):
-```
-Relaciones implícitas en tablas planas:
-- process.TBL_PNL (posiciones de fondos)
-- process.TBL_BMS_Exp (composición de índices)
-```
+**Por qué**:
+- Modelo de grafos más expresivo
+- Análisis de relaciones más eficientes
+- Historización completa
 
-**Ahora** (Inteligencia_Producto_Dev):
-```
-Relaciones explícitas en grafos:
-- BTFDS.btfds.Contains_instrument (edges Fondo→Instrumento)
-- BTFDS.btfds.Comprises_instrument (edges Índice→Instrumento)
-- BTFDS.btfds.EvolvesInto (edges Instrumento→Instrumento)
-```
+**Qué heredar**:
+- `usp_Update_Instruments_Bitemporal` (con modelo bitemporal)
+- `usp_Update_Instrument_Evolutions` (tracking genealogía)
+- `usp_Load_Fund_Position` (con estrategias inteligentes)
+- `usp_Load_Index_Composition`
 
-**Beneficios del cambio**:
-- Consultas de grafos eficientes
-- Análisis de caminos (path analysis)
-- Visualización de relaciones
-- Queries multi-hop
+**Consideraciones**:
+- Requiere cambios en esquema BTFDS.btfds.Instruments
+- Migración de datos existentes a modelo bitemporal
+- Más complejo de probar
 
-**Evidencia documental**: Líneas 60-69, 173-321, 662-673
+**Dependencias**: Cambios en BTFDS
 
 ---
 
-#### 2. De Point-in-Time a Bitemporal
+**5. Canonical ID (SHA2_256)**
 
-**Antes** (_16Dic):
-```
-Instrumentos sin histórico:
-- Solo estado actual
-- Cambios sobrescriben datos anteriores
-```
+**Por qué**:
+- Identificación inmutable
+- Deduplicación robusta
+- Linking entre sistemas
 
-**Ahora** (Inteligencia_Producto_Dev):
-```
-Modelo bitemporal en BTFDS.btfds.Instruments:
-- valid_from/valid_to (validez de negocio)
-- system_from/system_to (validez de sistema)
-- Versionado (version_number)
-```
+**Qué heredar**:
+- Generación de canonical_id en instrumentos
+- Uso en BTFDS para matching
 
-**Beneficios**:
-- Consultas históricas ("¿cómo estaba el 2023-06-01?")
-- Auditoría de cambios
-- Correcciones retroactivas
-- Regulatorio compliance
-
-**Evidencia documental**: Líneas 182, 699-713
+**Consideraciones**:
+- Requiere calcular para instrumentos existentes
+- Cambio en índices de BTFDS
 
 ---
 
-#### 3. De Colas Locales a Colas Centralizadas
+**6. Estrategias de Actualización Inteligentes**
 
-**Antes** (_16Dic):
-```
-Colas en Inteligencia_Producto_Dev.sandbox:
-├─ Homologacion_Fondos
-└─ Homologacion_Monedas
-```
+**Por qué**:
+- Optimiza performance (SKIP)
+- Mantiene historización correcta (CORRECTION)
+- Evita duplicados (NEW)
 
-**Ahora** (Inteligencia_Producto_Dev):
-```
-Colas en MonedaHomologacion.sandbox:
-├─ colaFondos
-├─ colaBenchmarks
-├─ colaPendientes
-└─ colaMonedas
-```
+**Qué heredar**:
+- Lógica NEW/APPEND/CORRECTION/SKIP en `usp_Load_Fund_Position`
 
-**Beneficios**:
-- Fuente única de verdad
-- Gobernanza centralizada
-- Evita duplicación
-
-**Evidencia documental**: Líneas 38-44, 633-647
+**Consideraciones**:
+- Requiere modelo bitemporal (system_from/system_to)
 
 ---
 
-### 📈 Impacto Funcional
+#### 🟢 Prioridad BAJA (Nice to have)
 
-#### Mejoras en Observabilidad
-- **+100%**: Sistema de logs completo vs sin logging
-- **Estados explícitos**: PENDING, RUNNING, COMPLETED, ERROR
-- **Métricas**: logs.Ejecucion_Metricas
+**7. Control de Concurrencia (sp_getapplock)**
 
-#### Mejoras en Confiabilidad
-- **Retry automático**: 1 intento en `Sync_PNL_To_Graph_v2`
-- **Validaciones**: Checks de integridad referencial
-- **Locks**: Prevención de race conditions
+**Por qué**:
+- Previene race conditions
+- Garantiza consistencia
 
-#### Mejoras en Performance
-- **Batch processing**: Configurable (100-1000 registros)
-- **Estrategia SKIP**: Evita updates innecesarios
-- **Índices específicos**: Mencionado en línea 736
-
-#### Mejoras en Auditoría
-- **Bitemporal**: Histórico completo
-- **Canonical ID**: Identificación inmutable
-- **Logging**: Trazabilidad end-to-end
+**Consideración**: Solo necesario si se ejecutan cargas concurrentes
 
 ---
 
-### ⚖️ Trade-offs
+**8. Procesamiento por Lotes Configurable**
 
-| Aspecto | Ganado | Perdido |
-|---------|--------|---------|
-| **Complejidad** | Arquitectura más robusta | Mayor overhead operacional |
-| **Observabilidad** | Logging y métricas completas | Espacio de almacenamiento |
-| **Automatización** | Orquestación y retry | Control manual granular |
-| **Modelo de datos** | Grafos + Bitemporal | Simplicidad de flat tables |
-| **Gobernanza** | Centralización en MonedaHomologacion | Autonomía local |
-| **Compatibilidad** | Trigger mantiene legacy sync | Dependencia de versiones _v2 |
+**Por qué**:
+- Mejor performance
+- Configurabilidad
+
+**Consideración**: Beneficio marginal si cargas actuales funcionan bien
 
 ---
 
-### 🎯 Conclusiones
+**9. Tracking de Evoluciones de Instrumentos**
 
-La migración de `Inteligencia_Producto_Dev_16Dic` a `Inteligencia_Producto_Dev` representa una **modernización arquitectónica significativa**:
+**Por qué**:
+- Genealogía de instrumentos
+- Análisis de reestructuraciones
 
-**Principales logros**:
-1. ✅ Integración completa con base de grafos (BTFDS)
-2. ✅ Sistema de logging y auditoría empresarial
-3. ✅ Modelo bitemporal para compliance y análisis histórico
-4. ✅ Automatización con retry y orquestación
-5. ✅ Centralización de datos maestros en MonedaHomologacion
+**Consideración**: Solo si el negocio lo requiere
 
-**Principales deprecaciones**:
-1. ❌ Stored procedures versión 1 (sin sufijo _v2)
-2. ❌ Colas locales en Inteligencia_Producto_Dev.sandbox
-3. ❌ BD_Instrumentos como fuente primaria
-4. ❌ Procesamiento sin logging
+---
 
-**Recomendación**:
-La migración es un **claro upgrade** en términos de capacidades, observabilidad y confiabilidad. El overhead adicional de complejidad está justificado por las ganancias en funcionalidad empresarial.
+### 🎯 Plan de Herencia Sugerido
+
+#### Fase 1: Fundamentos (2-4 semanas)
+1. ✅ Crear schema `logs.*` en base
+2. ✅ Migrar tablas de logging
+3. ✅ Copiar SPs _v2 a la base
+4. ✅ Probar SPs _v2 en paralelo
+5. ✅ Validar logging funciona correctamente
+
+#### Fase 2: Transición (4-6 semanas)
+1. ✅ Cambiar jobs ETL a usar SPs _v2
+2. ✅ Monitorear via logs.* nuevas tablas
+3. ✅ Validar retry automático funciona
+4. ✅ Deprecar SPs originales después de 2 semanas exitosas
+
+#### Fase 3: Avanzado (Opcional, 8-12 semanas)
+1. ⚠️ Evaluar migración a modelo bitemporal en BTFDS
+2. ⚠️ Implementar canonical_id si se aprueba
+3. ⚠️ Migrar a estrategias UPDATE inteligentes
+4. ⚠️ Implementar tracking de evoluciones si negocio lo requiere
+
+---
+
+### 🎯 Conclusión
+
+La versión `Inteligencia_Producto_Dev_16Dic` contiene **mejoras significativas** en observabilidad, confiabilidad y modelo de datos.
+
+**Recomendación principal**:
+Heredar de inmediato (Fase 1-2):
+- ✅ Sistema de logging (`logs.*`)
+- ✅ Stored procedures versión _v2
+- ✅ Retry automático
+
+**Evaluar después** (Fase 3):
+- ⚠️ Modelo bitemporal (si requiere auditoría histórica)
+- ⚠️ Canonical ID (si hay problemas de deduplicación)
+- ⚠️ Graph sync avanzado (si se necesita análisis de relaciones)
+
+El overhead adicional de complejidad está **justificado** para funcionalidades de Fase 1-2, proporcionando observabilidad crítica sin cambios arquitectónicos mayores. Las funcionalidades de Fase 3 requieren **evaluación caso por caso** según necesidades de negocio.
 
 ---
 
 ## 📅 Fecha de Última Actualización
-2025-12-17
+2025-12-18
 
 ## 👤 Autor
 Documentación generada automáticamente por Claude Code

@@ -52,9 +52,9 @@ export const FUND_CONFIG = {
       { id: 1, requiredFields: ['investmentTypeCode', 'nameInstrumento'] },
       // Paso 2: Identificadores (todos opcionales, siempre pasa)
       { id: 2, requiredFields: [] },
-      { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
+      { id: 3, requiredFields: ['companyName', 'sectorGICS'] },
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
-      { id: 5, requiredFields: ['investmentFundType'] },
+      { id: 5, requiredFields: ['fundTypeCode'] },
     ],
   },
 
@@ -153,6 +153,9 @@ export const FUND_CONFIG = {
       icon: 'BusinessIcon',
       step: 3,
 
+      // Ocultar issuerTypeCode para fondos
+      hiddenFields: ['issuerTypeCode'],
+
       // Campos de compania (todos explicitos, con sectorGICS)
       fields: {
         companyName: {
@@ -160,17 +163,13 @@ export const FUND_CONFIG = {
           label: 'Nombre Compania',
           type: 'text',
           required: true,
-          readOnly: true,
-          defaultValue: '[FUND]',
         },
         issuerTypeCode: {
           name: 'issuerTypeCode',
           label: 'Issuer_Type_Code',
           type: 'select',
           optionsKey: 'issuerTypes',
-          required: true,
-          readOnly: true,
-          defaultValue: '0',
+          required: false,
         },
         sectorGICS: {
           name: 'sectorGICS',

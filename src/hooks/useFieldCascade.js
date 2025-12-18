@@ -11,15 +11,22 @@ import {
   ALL_DEPENDENT_FIELDS,
   REESTRUCTURACION_FIELDS,
 } from '../constants/fieldCascade';
+import { trace, TRACE } from '../utils/tracing';
 
 const useFieldCascade = (setFields, companyState = null) => {
   // Flag para indicar si viene de auto-populate
   const isAutoPopulatingRef = useRef(false);
 
   // Wrapper para handleChange que incluye cascada - CONSOLIDADO EN UNA SOLA ACTUALIZACION
-  const handleChangeWithCascade = useCallback((e) => {
+  const handleChangeWithCascade = useCallback((e, investmentTypeCode) => {
     const { name, value, type, checked } = e.target;
     const newValue = type === 'checkbox' ? checked : value;
+
+    trace.enter(TRACE.CASCADE, 'handleChangeWithCascade', {
+      field: name,
+      newValue,
+      investmentTypeCode,
+    });
 
     // Preparar TODAS las actualizaciones en un solo objeto
     const updates = { [name]: newValue };
@@ -33,13 +40,45 @@ const useFieldCascade = (setFields, companyState = null) => {
       const skipAutoPopulate = config.skipIfAutoPopulate && isAutoPopulatingRef.current;
       const skipCompanySelected = config.skipIfCompanySelected && companyState?.selectedCompany;
 
+      trace.cascade('Evaluando cascada', {
+        field: name,
+        hasCascade: true,
+        shouldCascade,
+        skipAutoPopulate,
+        skipCompanySelected,
+        fieldsToClean: config.clearFields,
+      });
+
       if (shouldCascade && !skipAutoPopulate && !skipCompanySelected) {
+        // EXCEPCIÓN: Si cambia investmentTypeCode a Fund (6),
+        // NO limpiar sectorGICS ni issuerTypeCode porque tienen defaults fijos
+        const isChangingToFund = name === 'investmentTypeCode' && parseInt(newValue) === 6;
+
         // Agregar campos a limpiar
         config.clearFields.forEach(field => {
+          // Skip sectorGICS e issuerTypeCode si es Fund
+          if (isChangingToFund && (field === 'sectorGICS' || field === 'issuerTypeCode')) {
+            trace.cascade(`✅ Preservando ${field} para Fund`);
+            return;
+          }
+          trace.cascade(`🧹 Limpiando campo: ${field}`);
           updates[field] = '';
         });
+      } else {
+        trace.cascade('⏭️ Skip cascada por condiciones', {
+          shouldCascade,
+          skipAutoPopulate,
+          skipCompanySelected,
+        });
       }
+    } else {
+      trace.cascade('⏭️ Sin cascada configurada para este campo');
     }
+
+    trace.exit(TRACE.CASCADE, 'handleChangeWithCascade', {
+      totalUpdates: Object.keys(updates).length,
+      updates,
+    });
 
     // UNA SOLA llamada a setState con todos los cambios
     setFields(updates);
@@ -74,7 +113,7 @@ const useFieldCascade = (setFields, companyState = null) => {
   }, [setFields, companyState]);
 
   // Auto-poblar campos desde una compania seleccionada
-  const populateFromCompany = useCallback((company, companyName) => {
+  const populateFromCompany = useCallback((company, companyName, investmentTypeCode) => {
     if (!company) return;
 
     isAutoPopulatingRef.current = true;
@@ -84,11 +123,17 @@ const useFieldCascade = (setFields, companyState = null) => {
         companyName: companyName || company.companyName,
       };
 
-      if (company.issuerTypeCode !== undefined && company.issuerTypeCode !== null) {
-        updates.issuerTypeCode = String(company.issuerTypeCode);
-      }
-      if (company.sectorGICS !== undefined && company.sectorGICS !== null) {
-        updates.sectorGICS = String(company.sectorGICS);
+      // Para Fund (6), NO auto-poblar issuerTypeCode ni sectorGICS
+      // porque el usuario busca compañía pero sectorGICS debe ser siempre '66666666' (FIP)
+      const skipCompanyDefaults = investmentTypeCode === 6;
+
+      if (!skipCompanyDefaults) {
+        if (company.issuerTypeCode !== undefined && company.issuerTypeCode !== null) {
+          updates.issuerTypeCode = String(company.issuerTypeCode);
+        }
+        if (company.sectorGICS !== undefined && company.sectorGICS !== null) {
+          updates.sectorGICS = String(company.sectorGICS);
+        }
       }
 
       setFields(updates);
