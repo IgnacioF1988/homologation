@@ -12,7 +12,6 @@ const colaPendientesRoutes = require('./routes/colaPendientes.routes');
 const procesosV2Routes = require('./routes/procesos.v2.routes');
 const sandboxQueuesRoutes = require('./routes/sandboxQueues.routes');
 const logsRoutes = require('./routes/logs.routes');
-const cuboRoutes = require('./routes/cubo.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -63,8 +62,6 @@ app.use('/api/procesos', procesosV2Routes);
 app.use('/api/sandbox-queues', sandboxQueuesRoutes);
 // Rutas de logs
 app.use('/api/logs', logsRoutes);
-// Rutas del cubo IPA (Visualizador)
-app.use('/api/cubo', cuboRoutes);
 
 // Ruta raíz
 app.get('/api', (req, res) => {

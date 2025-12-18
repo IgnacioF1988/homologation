@@ -18,10 +18,8 @@ import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
-import ViewModuleIcon from '@mui/icons-material/ViewModule';
 
 import InstrumentForm from '../components/InstrumentForm';
-import CubeViewer from '../components/CubeViewer';
 import PipelineExecution from '../components/PipelineExecution';
 import WorkQueue from '../components/WorkQueue';
 import SearchHelper from '../components/SearchHelper';
@@ -186,12 +184,6 @@ const TabsNavigation = memo(({ activeTab, onTabChange }) => (
         iconPosition="start"
         label="Pipeline ETL"
         sx={{ ...tabItemSx, '& .MuiTab-iconWrapper': { color: colors.success.main } }}
-      />
-      <Tab
-        icon={<ViewModuleIcon sx={{ fontSize: 20 }} />}
-        iconPosition="start"
-        label="Visualizador Cubo v1.0"
-        sx={{ ...tabItemSx, '& .MuiTab-iconWrapper': { color: colors.secondary.main } }}
       />
     </Tabs>
   </Paper>
@@ -477,17 +469,12 @@ const HomologacionPage = () => {
         <Box sx={{ display: activeTab === 2 ? 'block' : 'none' }}>
           <PipelineExecution onExecutionComplete={handleExecutionComplete} />
         </Box>
-
-        {/* Tab: Visualizador Cubo */}
-        <Box sx={{ display: activeTab === 3 ? 'block' : 'none' }}>
-          <CubeViewer />
-        </Box>
       </Container>
 
-      {/* FAB del Explorador Dimensional - oculto en pestañas de ejecución y cubo */}
+      {/* FAB del Explorador Dimensional - oculto en pestaña de ejecución */}
       <Box sx={{
-        visibility: (activeTab === 2 || activeTab === 3) ? 'hidden' : 'visible',
-        pointerEvents: (activeTab === 2 || activeTab === 3) ? 'none' : 'auto',
+        visibility: activeTab === 2 ? 'hidden' : 'visible',
+        pointerEvents: activeTab === 2 ? 'none' : 'auto',
       }}>
         <DimensionalExplorerFab
           onClick={() => setExplorerOpen(true)}
@@ -502,10 +489,10 @@ const HomologacionPage = () => {
         />
       )}
 
-      {/* SearchHelper flotante - oculto en pestañas de ejecución y cubo */}
+      {/* SearchHelper flotante - oculto en pestaña de ejecución */}
       <Box sx={{
-        visibility: (activeTab === 2 || activeTab === 3) ? 'hidden' : 'visible',
-        pointerEvents: (activeTab === 2 || activeTab === 3) ? 'none' : 'auto',
+        visibility: activeTab === 2 ? 'hidden' : 'visible',
+        pointerEvents: activeTab === 2 ? 'none' : 'auto',
       }}>
         <SearchHelper
           onCopyValues={handleCopyFromSearch}
