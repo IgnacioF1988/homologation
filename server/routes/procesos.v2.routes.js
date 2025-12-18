@@ -150,6 +150,15 @@ router.post('/v2/ejecutar', async (req, res) => {
 // NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
+    // Insertar registro inicial en logs.Ejecuciones
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('FechaReporte', sql.Date, fechaReporte)
+      .query(`
+        INSERT INTO logs.Ejecuciones (ID_Ejecucion, FechaReporte, FechaInicio, Estado, Etapa_Actual)
+        VALUES (@ID_Ejecucion, @FechaReporte, GETDATE(), 'EN_PROGRESO', 'INICIANDO')
+      `);
+
     const request = pool.request();
 
     // Solo pasar FechaReporte (único parámetro que acepta el SP)
@@ -170,11 +179,25 @@ async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) 
     const result = await request.execute('process.Process_Funds');
     console.log(`[Ejecución ${idEjecucion}] Process_Funds completado con código: ${result.returnValue}`);
 
+    const estadoFinal = result.returnValue === 0 ? 'COMPLETADO' :
+                        result.returnValue === 1 ? 'PARCIAL' : 'ERROR';
+
+    // Actualizar estado en BD
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('Estado', sql.NVarChar, estadoFinal)
+      .query(`
+        UPDATE logs.Ejecuciones
+        SET Estado = @Estado,
+            FechaFin = GETDATE(),
+            Etapa_Actual = 'FINALIZADO'
+        WHERE ID_Ejecucion = @ID_Ejecucion
+      `);
+
     // Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
-      estado: result.returnValue === 0 ? 'COMPLETADO' :
-              result.returnValue === 1 ? 'PARCIAL' : 'ERROR',
+      estado: estadoFinal,
       finalizadoEn: new Date(),
     });
 
@@ -184,8 +207,8 @@ async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) 
     // Marcar ejecución como error en BD
     try {
       await pool.request()
-        .input('ID_Ejecucion', idEjecucion)
-        .input('Error', err.message)
+        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+        .input('Error', sql.NVarChar, err.message)
         .query(`
           UPDATE logs.Ejecuciones
           SET Estado = 'ERROR',
@@ -218,9 +241,9 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
 
     // Obtener ejecución
     const ejecucionResult = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
-        SELECT * FROM logs.Ejecuciones 
+        SELECT * FROM logs.Ejecuciones
         WHERE ID_Ejecucion = @ID_Ejecucion
       `);
 
@@ -233,28 +256,28 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
 
     // Obtener fondos con estado
     const fondosResult = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
-        SELECT 
+        SELECT
           ef.*,
           bf.FundName
         FROM logs.Ejecucion_Fondos ef
         LEFT JOIN dimensionales.BD_Funds bf ON CAST(ef.ID_Fund AS INT) = bf.ID_Fund
         WHERE ef.ID_Ejecucion = @ID_Ejecucion
-        ORDER BY 
-          CASE ef.Estado_Final 
-            WHEN 'ERROR' THEN 1 
+        ORDER BY
+          CASE ef.Estado_Final
+            WHEN 'ERROR' THEN 1
             WHEN 'PARCIAL' THEN 2
             WHEN 'WARNING' THEN 3
-            WHEN 'COMPLETADO' THEN 4 
-            ELSE 5 
+            WHEN 'COMPLETADO' THEN 4
+            ELSE 5
           END,
           ef.FundShortName
       `);
 
     // Obtener logs recientes
     const logsResult = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT TOP 100 *
         FROM logs.Ejecucion_Logs
@@ -264,12 +287,12 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
 
     // Obtener métricas por fondo con error
     const metricasResult = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT m.*, ef.FundShortName
         FROM logs.Ejecucion_Metricas m
-        INNER JOIN logs.Ejecucion_Fondos ef 
-          ON m.ID_Ejecucion = ef.ID_Ejecucion 
+        INNER JOIN logs.Ejecucion_Fondos ef
+          ON m.ID_Ejecucion = ef.ID_Ejecucion
           AND m.ID_Fund = ef.ID_Fund
         WHERE m.ID_Ejecucion = @ID_Ejecucion
           AND m.Validacion_OK = 0
@@ -374,11 +397,11 @@ router.get('/v2/ejecucion/:id/fondos', async (req, res) => {
     `;
 
     const request = pool.request();
-    request.input('ID_Ejecucion', id);
+    request.input('ID_Ejecucion', sql.BigInt, id);
 
     if (estado) {
       query += ' AND ef.Estado_Final = @estado';
-      request.input('estado', estado);
+      request.input('estado', sql.NVarChar, estado);
     }
 
     if (etapa) {
@@ -423,23 +446,23 @@ router.get('/v2/ejecucion/:id/logs', async (req, res) => {
     `;
 
     const request = pool.request();
-    request.input('ID_Ejecucion', id);
-    request.input('offset', parseInt(offset));
-    request.input('limit', parseInt(limit));
+    request.input('ID_Ejecucion', sql.BigInt, id);
+    request.input('offset', sql.Int, parseInt(offset));
+    request.input('limit', sql.Int, parseInt(limit));
 
     if (idFund) {
       query += ' AND ID_Fund = @idFund';
-      request.input('idFund', idFund);
+      request.input('idFund', sql.NVarChar, idFund);
     }
 
     if (nivel) {
       query += ' AND Nivel = @nivel';
-      request.input('nivel', nivel);
+      request.input('nivel', sql.NVarChar, nivel);
     }
 
     if (etapa) {
       query += ' AND Etapa = @etapa';
-      request.input('etapa', etapa);
+      request.input('etapa', sql.NVarChar, etapa);
     }
 
     query += `
@@ -452,7 +475,7 @@ router.get('/v2/ejecucion/:id/logs', async (req, res) => {
 
     // Contar total
     const countResult = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT COUNT(*) as total
         FROM logs.Ejecucion_Logs
@@ -500,11 +523,11 @@ router.get('/v2/ejecucion/:id/metricas', async (req, res) => {
     `;
 
     const request = pool.request();
-    request.input('ID_Ejecucion', id);
+    request.input('ID_Ejecucion', sql.BigInt, id);
 
     if (idFund) {
       query += ' AND m.ID_Fund = @idFund';
-      request.input('idFund', idFund);
+      request.input('idFund', sql.NVarChar, idFund);
     }
 
     query += ' ORDER BY m.Etapa, ef.FundShortName';
@@ -545,8 +568,8 @@ router.post('/v2/ejecucion/:id/reprocesar', async (req, res) => {
 
     // Verificar que el fondo sea elegible para reproceso
     const checkResult = await pool.request()
-      .input('ID_Ejecucion', id)
-      .input('ID_Fund', idFund)
+      .input('ID_Ejecucion', sql.BigInt, id)
+      .input('ID_Fund', sql.NVarChar, idFund)
       .query(`
         SELECT ef.Elegible_Reproceso, e.FechaReporte
         FROM logs.Ejecucion_Fondos ef
@@ -571,11 +594,11 @@ router.post('/v2/ejecucion/:id/reprocesar', async (req, res) => {
 
     // Resetear estado del fondo
     await pool.request()
-      .input('ID_Ejecucion', id)
-      .input('ID_Fund', idFund)
+      .input('ID_Ejecucion', sql.BigInt, id)
+      .input('ID_Fund', sql.NVarChar, idFund)
       .query(`
         UPDATE logs.Ejecucion_Fondos
-        SET 
+        SET
           Estado_Process_IPA = NULL,
           Estado_IPA_01_RescatarLocalPrice = NULL,
           Estado_IPA_02_AjusteSONA = NULL,
@@ -599,8 +622,8 @@ router.post('/v2/ejecucion/:id/reprocesar', async (req, res) => {
 
     // Registrar log
     await pool.request()
-      .input('ID_Ejecucion', id)
-      .input('ID_Fund', idFund)
+      .input('ID_Ejecucion', sql.BigInt, id)
+      .input('ID_Fund', sql.NVarChar, idFund)
       .query(`
         INSERT INTO logs.Ejecucion_Logs (ID_Ejecucion, ID_Fund, Nivel, Categoria, Etapa, Mensaje)
         VALUES (@ID_Ejecucion, @ID_Fund, 'INFO', 'SISTEMA', 'REPROCESO', 'Iniciando reproceso del fondo')
@@ -642,79 +665,79 @@ router.get('/v2/ejecucion/:id/estadisticas-etapas', async (req, res) => {
     const pool = await getInteligenciaPool();
 
     const result = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
-        SELECT 
+        SELECT
           'EXTRACCION' as Etapa,
           SUM(CASE WHEN Estado_Extraccion = 'OK' THEN 1 ELSE 0 END) as OK,
           SUM(CASE WHEN Estado_Extraccion = 'ERROR' THEN 1 ELSE 0 END) as Error,
           SUM(CASE WHEN Estado_Extraccion = 'WARNING' THEN 1 ELSE 0 END) as Warning,
           SUM(CASE WHEN Estado_Extraccion IS NULL OR Estado_Extraccion = 'EN_PROGRESO' THEN 1 ELSE 0 END) as Pendiente
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'VALIDACION',
           SUM(CASE WHEN Estado_Validacion = 'OK' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Validacion = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Validacion = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Validacion IS NULL OR Estado_Validacion = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'PROCESS_IPA',
           SUM(CASE WHEN Estado_Process_IPA = 'OK' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_IPA = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_IPA = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_IPA IS NULL OR Estado_Process_IPA = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'PROCESS_CAPM',
           SUM(CASE WHEN Estado_Process_CAPM = 'OK' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_CAPM = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_CAPM = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_CAPM IS NULL OR Estado_Process_CAPM = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'PROCESS_DERIVADOS',
           SUM(CASE WHEN Estado_Process_Derivados IN ('OK', 'N/A') THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_Derivados = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_Derivados = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_Derivados IS NULL OR Estado_Process_Derivados = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'PROCESS_PNL',
           SUM(CASE WHEN Estado_Process_PNL IN ('OK', 'N/A') THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_PNL = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_PNL = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_PNL IS NULL OR Estado_Process_PNL = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'PROCESS_UBS',
           SUM(CASE WHEN Estado_Process_UBS IN ('OK', 'N/A') THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_UBS = 'ERROR' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_UBS = 'WARNING' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Process_UBS IS NULL OR Estado_Process_UBS = 'EN_PROGRESO' THEN 1 ELSE 0 END)
         FROM logs.Ejecucion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
-        
+
         UNION ALL
-        
-        SELECT 
+
+        SELECT
           'CONCATENAR',
           SUM(CASE WHEN Estado_Concatenar = 'OK' THEN 1 ELSE 0 END),
           SUM(CASE WHEN Estado_Concatenar = 'ERROR' THEN 1 ELSE 0 END),
@@ -770,9 +793,9 @@ router.get('/v2/ejecucion/:id/diagnostico', async (req, res) => {
 
     // Fondos con error
     const fondosError = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
-        SELECT 
+        SELECT
           ef.ID_Fund,
           ef.FundShortName,
           ef.Paso_Con_Error,
@@ -782,8 +805,8 @@ router.get('/v2/ejecucion/:id/diagnostico', async (req, res) => {
           m.Diferencia,
           m.Diferencia_Porcentual
         FROM logs.Ejecucion_Fondos ef
-        LEFT JOIN logs.Ejecucion_Metricas m 
-          ON ef.ID_Ejecucion = m.ID_Ejecucion 
+        LEFT JOIN logs.Ejecucion_Metricas m
+          ON ef.ID_Ejecucion = m.ID_Ejecucion
           AND ef.ID_Fund = m.ID_Fund
           AND ef.Paso_Con_Error = m.Etapa
         WHERE ef.ID_Ejecucion = @ID_Ejecucion
@@ -792,7 +815,7 @@ router.get('/v2/ejecucion/:id/diagnostico', async (req, res) => {
 
     // Logs de error
     const logsError = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT *
         FROM logs.Ejecucion_Logs
@@ -803,9 +826,9 @@ router.get('/v2/ejecucion/:id/diagnostico', async (req, res) => {
 
     // Resumen por tipo de error
     const resumenErrores = await pool.request()
-      .input('ID_Ejecucion', id)
+      .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
-        SELECT 
+        SELECT
           Paso_Con_Error,
           COUNT(*) as CantidadFondos,
           STRING_AGG(FundShortName, ', ') as Fondos
