@@ -150,13 +150,15 @@ router.post('/v2/ejecutar', async (req, res) => {
 // NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
-    // Insertar registro inicial en logs.Ejecuciones
+    // Insertar registro inicial en logs.Ejecuciones con IDENTITY_INSERT
     await pool.request()
       .input('ID_Ejecucion', sql.BigInt, idEjecucion)
       .input('FechaReporte', sql.Date, fechaReporte)
       .query(`
+        SET IDENTITY_INSERT logs.Ejecuciones ON;
         INSERT INTO logs.Ejecuciones (ID_Ejecucion, FechaReporte, FechaInicio, Estado, Etapa_Actual)
-        VALUES (@ID_Ejecucion, @FechaReporte, GETDATE(), 'EN_PROGRESO', 'INICIANDO')
+        VALUES (@ID_Ejecucion, @FechaReporte, GETDATE(), 'EN_PROGRESO', 'INICIANDO');
+        SET IDENTITY_INSERT logs.Ejecuciones OFF;
       `);
 
     const request = pool.request();
