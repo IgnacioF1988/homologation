@@ -11,14 +11,15 @@ import {
   ALL_DEPENDENT_FIELDS,
   REESTRUCTURACION_FIELDS,
 } from '../constants/fieldCascade';
-import { trace, TRACE } from '../utils/tracing';
+import { trace, TRACE, traceState } from '../utils/tracing';
+import { getAssetTypeConfig } from '../config/assetTypes';
 
-const useFieldCascade = (setFields, companyState = null) => {
+const useFieldCascade = (setFields, companyState = null, investmentTypeCode = null) => {
   // Flag para indicar si viene de auto-populate
   const isAutoPopulatingRef = useRef(false);
 
   // Wrapper para handleChange que incluye cascada - CONSOLIDADO EN UNA SOLA ACTUALIZACION
-  const handleChangeWithCascade = useCallback((e, investmentTypeCode) => {
+  const handleChangeWithCascade = useCallback((e, investmentTypeCode, formData = {}) => {
     const { name, value, type, checked } = e.target;
     const newValue = type === 'checkbox' ? checked : value;
 
@@ -27,6 +28,9 @@ const useFieldCascade = (setFields, companyState = null) => {
       newValue,
       investmentTypeCode,
     });
+
+    // SNAPSHOT: Capture state before cascade
+    traceState(TRACE.CASCADE, `BEFORE cascade (${name} changed)`, formData);
 
     // Preparar TODAS las actualizaciones en un solo objeto
     const updates = { [name]: newValue };
@@ -61,8 +65,24 @@ const useFieldCascade = (setFields, companyState = null) => {
             trace.cascade(`✅ Preservando ${field} para Fund`);
             return;
           }
-          trace.cascade(`🧹 Limpiando campo: ${field}`);
-          updates[field] = '';
+
+          // Verificar si el campo tiene defaultValue en la config
+          const assetConfig = getAssetTypeConfig(investmentTypeCode);
+          let defaultValue = '';
+
+          // Buscar el defaultValue en todas las secciones
+          if (assetConfig?.sections) {
+            for (const section of Object.values(assetConfig.sections)) {
+              if (section.fields?.[field]?.defaultValue !== undefined) {
+                defaultValue = section.fields[field].defaultValue;
+                trace.cascade(`🔄 Aplicando defaultValue para ${field}: ${defaultValue}`);
+                break;
+              }
+            }
+          }
+
+          trace.cascade(`🧹 Limpiando campo: ${field} = ${defaultValue || '(vacío)'}`);
+          updates[field] = defaultValue;
         });
       } else {
         trace.cascade('⏭️ Skip cascada por condiciones', {
@@ -74,6 +94,13 @@ const useFieldCascade = (setFields, companyState = null) => {
     } else {
       trace.cascade('⏭️ Sin cascada configurada para este campo');
     }
+
+    // SNAPSHOT: Capture projected state after cascade
+    const projectedState = { ...formData, ...updates };
+    traceState(TRACE.CASCADE, `AFTER cascade (${name} changed)`, projectedState, {
+      diff: true,
+      prevState: formData
+    });
 
     trace.exit(TRACE.CASCADE, 'handleChangeWithCascade', {
       totalUpdates: Object.keys(updates).length,
@@ -103,14 +130,28 @@ const useFieldCascade = (setFields, companyState = null) => {
     // Limpiar campos dependientes
     if (config.clearFields && config.clearFields.length > 0) {
       const clears = {};
+      const assetConfig = getAssetTypeConfig(investmentTypeCode);
+
       config.clearFields.forEach(field => {
-        clears[field] = '';
+        let defaultValue = '';
+
+        // Buscar el defaultValue en todas las secciones
+        if (assetConfig?.sections) {
+          for (const section of Object.values(assetConfig.sections)) {
+            if (section.fields?.[field]?.defaultValue !== undefined) {
+              defaultValue = section.fields[field].defaultValue;
+              break;
+            }
+          }
+        }
+
+        clears[field] = defaultValue;
       });
       setFields(clears);
     }
 
     return { shouldClearCompanyState: !!config.clearCompanyState };
-  }, [setFields, companyState]);
+  }, [setFields, companyState, investmentTypeCode]);
 
   // Auto-poblar campos desde una compania seleccionada
   const populateFromCompany = useCallback((company, companyName, investmentTypeCode) => {

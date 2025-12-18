@@ -56,7 +56,7 @@ import { api } from '../services/api';
 
 // Utils - Funciones de mapeo compartidas
 import { mapRegistroCompleto, mapRegistroSinMonedas } from '../utils/instrumentMapping';
-import { trace, TRACE } from '../utils/tracing';
+import { trace, TRACE, traceAsync } from '../utils/tracing';
 
 // Styles
 import { formContainer } from '../styles/formStyles';
@@ -143,7 +143,7 @@ const InstrumentForm = forwardRef(({
   const {
     handleChangeWithCascade,
     populateFromCompany,
-  } = useFieldCascade(setFields);
+  } = useFieldCascade(setFields, companyState, formData.investmentTypeCode);
 
   // Hook de busqueda de instrumentos - AHORA USA formData para disparar busquedas
   const {
@@ -211,71 +211,79 @@ const InstrumentForm = forwardRef(({
       return;
     }
 
-    const applyDefaults = async () => {
-      try {
-        const fieldsToApply = {};
+    // Wrap entire async operation with traceAsync for timing visibility
+    traceAsync(TRACE.DEFAULTS, 'AUTO-DEFAULTS useEffect', async () => {
+      const fieldsToApply = {};
 
-        // 1. SIEMPRE aplicar defaults estáticos del config (no depende de moneda)
-        const staticDefaults = getDefaultValues();
-        trace.defaults('Defaults del config obtenidos', {
-          totalDefaults: Object.keys(staticDefaults).length,
-          fields: Object.keys(staticDefaults),
-          values: staticDefaults,
-        });
+      // 1. SIEMPRE aplicar defaults estáticos del config (no depende de moneda)
+      const staticDefaults = getDefaultValues();
+      trace.defaults('Defaults del config obtenidos', {
+        totalDefaults: Object.keys(staticDefaults).length,
+        fields: Object.keys(staticDefaults),
+        values: staticDefaults,
+      });
 
-        Object.entries(staticDefaults).forEach(([fieldName, defaultValue]) => {
-          // No sobrescribir campos que ya tienen valor
-          if (!formData[fieldName] || formData[fieldName] === '') {
-            trace.defaults(`✅ Aplicando default: ${fieldName} = ${defaultValue}`);
-            fieldsToApply[fieldName] = defaultValue;
-          } else {
-            trace.defaults(`⏭️ Skip ${fieldName}, ya tiene valor: ${formData[fieldName]}`);
-          }
-        });
-
-        // 2. SI hay moneda, aplicar currencies (solo para tipos que lo necesitan)
-        if ([3, 4, 5, 6, 7].includes(formData.investmentTypeCode) && formData.moneda) {
-          trace.defaults('Obteniendo monedas de API', { monedaId: formData.moneda });
-
-          try {
-            const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
-
-            if (monedaRes.success) {
-              trace.defaults('✅ Moneda obtenida de API', { nombre: monedaRes.data.nombre });
-
-              if (!formData.issueCurrency && !fieldsToApply.issueCurrency) {
-                fieldsToApply.issueCurrency = monedaRes.data.nombre;
-                trace.defaults(`✅ issueCurrency = ${monedaRes.data.nombre}`);
-              }
-              if (!formData.riskCurrency && !fieldsToApply.riskCurrency) {
-                fieldsToApply.riskCurrency = monedaRes.data.nombre;
-                trace.defaults(`✅ riskCurrency = ${monedaRes.data.nombre}`);
-              }
-            }
-          } catch (apiError) {
-            trace.error(TRACE.DEFAULTS, 'Error obteniendo moneda de API', apiError);
-          }
-        }
-
-        // 3. Aplicar todos en batch
-        if (Object.keys(fieldsToApply).length > 0) {
-          trace.defaults('📝 Aplicando campos en batch', {
-            totalFields: Object.keys(fieldsToApply).length,
-            fields: fieldsToApply,
-          });
-          setFields(fieldsToApply);
+      Object.entries(staticDefaults).forEach(([fieldName, defaultValue]) => {
+        // No sobrescribir campos que ya tienen valor
+        if (!formData[fieldName] || formData[fieldName] === '') {
+          trace.defaults(`✅ Aplicando default: ${fieldName} = ${defaultValue}`);
+          fieldsToApply[fieldName] = defaultValue;
         } else {
-          trace.defaults('⏭️ No hay campos para aplicar');
+          trace.defaults(`⏭️ Skip ${fieldName}, ya tiene valor: ${formData[fieldName]}`);
         }
+      });
 
-      } catch (error) {
-        trace.error(TRACE.DEFAULTS, 'Error aplicando defaults', error);
+      // 2. SI hay moneda, aplicar currencies (solo para tipos que lo necesitan)
+      if ([3, 4, 5, 6, 7].includes(formData.investmentTypeCode) && formData.moneda) {
+        trace.defaults('Obteniendo monedas de API', { monedaId: formData.moneda });
+
+        try {
+          const monedaRes = await api.catalogos.getMonedaById(formData.moneda);
+
+          if (monedaRes.success) {
+            trace.defaults('✅ Moneda obtenida de API', { nombre: monedaRes.data.nombre });
+
+            // Actualizar issueCurrency si está vacío O si es el ID de moneda (pendiente de conversión)
+            const needsIssueCurrencyUpdate = !formData.issueCurrency ||
+                                             formData.issueCurrency === String(formData.moneda) ||
+                                             formData.issueCurrency === formData.moneda;
+
+            if (needsIssueCurrencyUpdate && !fieldsToApply.issueCurrency) {
+              fieldsToApply.issueCurrency = monedaRes.data.nombre;
+              trace.defaults(`✅ issueCurrency = ${monedaRes.data.nombre}`);
+            }
+
+            // Actualizar riskCurrency si está vacío O si es el ID de moneda (pendiente de conversión)
+            const needsRiskCurrencyUpdate = !formData.riskCurrency ||
+                                            formData.riskCurrency === String(formData.moneda) ||
+                                            formData.riskCurrency === formData.moneda;
+
+            if (needsRiskCurrencyUpdate && !fieldsToApply.riskCurrency) {
+              fieldsToApply.riskCurrency = monedaRes.data.nombre;
+              trace.defaults(`✅ riskCurrency = ${monedaRes.data.nombre}`);
+            }
+          }
+        } catch (apiError) {
+          trace.error(TRACE.DEFAULTS, 'Error obteniendo moneda de API', apiError);
+        }
       }
-    };
 
-    applyDefaults();
-    trace.exit(TRACE.DEFAULTS, 'AUTO-DEFAULTS useEffect');
-  }, [formData.investmentTypeCode, mode, formData.moneda, getDefaultValues, setFields]);
+      // 3. Aplicar todos en batch
+      if (Object.keys(fieldsToApply).length > 0) {
+        trace.defaults('📝 Aplicando campos en batch', {
+          totalFields: Object.keys(fieldsToApply).length,
+          fields: fieldsToApply,
+        });
+        setFields(fieldsToApply);
+      } else {
+        trace.defaults('⏭️ No hay campos para aplicar');
+      }
+
+      return fieldsToApply;
+    }).catch(error => {
+      trace.error(TRACE.DEFAULTS, 'Error fatal aplicando defaults', error);
+    });
+  }, [formData.investmentTypeCode, mode, formData.moneda, formData.issueCountry, formData.riskCountry, getDefaultValues, setFields]);
 
   // =============================================================================
   // DEBUG: Verificar valores de formData después de aplicar defaults
@@ -317,8 +325,8 @@ const InstrumentForm = forwardRef(({
 
   // Manejar cambio de campos (con cascada y validacion)
   const handleFieldChange = useCallback((e) => {
-    handleChangeWithCascade(e);
-  }, [handleChangeWithCascade]);
+    handleChangeWithCascade(e, formData.investmentTypeCode, formData);
+  }, [handleChangeWithCascade, formData.investmentTypeCode, formData]);
 
   // Manejar cambio de checkbox de reestructuracion
   const handleReestructuracionChange = useCallback(async (e) => {

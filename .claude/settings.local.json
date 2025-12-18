@@ -47,6 +47,8 @@
     "playwright",
     "exa",
     "sqlserver-moneda",
-    "filesystem"
-  ]
+    "filesystem",
+    "chrome-devtools"
+  ],
+  "enableAllProjectMcpServers": true
 }
