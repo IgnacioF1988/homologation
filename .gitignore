@@ -1,0 +1,7 @@
+node_modules
+build/
+.env
+.claude/settings.local.json
+.mcp.json
+nul
+package-lock.json

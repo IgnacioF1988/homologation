@@ -13,11 +13,6 @@ const procesosV2Routes = require('./routes/procesos.v2.routes');
 const sandboxQueuesRoutes = require('./routes/sandboxQueues.routes');
 const logsRoutes = require('./routes/logs.routes');
 const cuboRoutes = require('./routes/cubo.routes');
-const syncRoutes = require('./routes/sync.routes');
-
-// Dependencias para sincronización automática
-const cron = require('node-cron');
-const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -70,8 +65,6 @@ app.use('/api/sandbox-queues', sandboxQueuesRoutes);
 app.use('/api/logs', logsRoutes);
 // Rutas del cubo IPA (Visualizador)
 app.use('/api/cubo', cuboRoutes);
-// Rutas de sincronización Legacy ↔ Moderno
-app.use('/api/sync', syncRoutes);
 
 // Ruta raíz
 app.get('/api', (req, res) => {
@@ -160,60 +153,10 @@ const server = app.listen(PORT, HOST, async () => {
   }
 
   // ============================================
-  // JOBS DE SINCRONIZACIÓN AUTOMÁTICA
+  // JOBS DE SINCRONIZACIÓN - ELIMINADOS
   // ============================================
-
-  // Job de sincronización de homologación (cada 5 minutos)
-  console.log('⏰ Configurando job de sincronización bidireccional (cada 5 min)...');
-  cron.schedule('*/5 * * * *', async () => {
-    try {
-      console.log('[SYNC-JOB] Iniciando sincronización bidireccional de homologación...');
-
-      // Legacy → Moderno (detectar nuevos pendientes)
-      const fromLegacyRes = await axios.post(`http://localhost:${PORT}/api/sync/homologacion-from-legacy`);
-      if (fromLegacyRes.data.success) {
-        const total = fromLegacyRes.data.data.instrumentos + fromLegacyRes.data.data.fondos +
-                      fromLegacyRes.data.data.monedas + fromLegacyRes.data.data.benchmarks;
-        if (total > 0) {
-          console.log(`[SYNC-JOB] Legacy → Moderno: ${total} items pendientes sincronizados`);
-        }
-      }
-
-      // Moderno → Legacy (sincronizar resoluciones)
-      const toLegacyRes = await axios.post(`http://localhost:${PORT}/api/sync/homologacion-to-legacy`);
-      if (toLegacyRes.data.success) {
-        const total = toLegacyRes.data.data.instrumentos + toLegacyRes.data.data.fondos +
-                      toLegacyRes.data.data.monedas + toLegacyRes.data.data.benchmarks;
-        if (total > 0) {
-          console.log(`[SYNC-JOB] Moderno → Legacy: ${total} resoluciones sincronizadas`);
-        }
-      }
-
-    } catch (err) {
-      console.error('[SYNC-JOB] Error en sincronización bidireccional:', err.message);
-    }
-  });
-
-  // Job de sincronización dimensional (diario a las 3 AM)
-  console.log('⏰ Configurando job de sincronización dimensional (diario 3:00 AM)...');
-  cron.schedule('0 3 * * *', async () => {
-    try {
-      console.log('[SYNC-JOB] Iniciando sincronización dimensional diaria...');
-
-      const res = await axios.post(`http://localhost:${PORT}/api/sync/dimensionales-from-legacy`);
-      if (res.data.success) {
-        const total = res.data.data.instrumentos + res.data.data.fondos +
-                      res.data.data.benchmarks + res.data.data.monedas;
-        console.log(`[SYNC-JOB] Sincronización dimensional completada: ${total} items actualizados`);
-        console.log(`[SYNC-JOB] Detalles: ${JSON.stringify(res.data.data)}`);
-      }
-
-    } catch (err) {
-      console.error('[SYNC-JOB] Error en sincronización dimensional:', err.message);
-    }
-  });
-
-  console.log('✅ Jobs de sincronización configurados correctamente\n');
+  // Sistema de sincronización bidireccional eliminado el 2025-12-18
+  console.log('ℹ️  Sistema de sincronización legacy descontinuado\n');
 });
 
 // Graceful shutdown
