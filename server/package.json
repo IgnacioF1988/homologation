@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node --max-old-space-size=4096 index.js",
-    "dev": "nodemon --max-old-space-size=4096 index.js"
+    "dev": "nodemon --max-old-space-size=4096 index.js",
+    "test:quick": "node quick_test_v2.js",
+    "test:full": "node test_pipeline_v2.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -14,6 +16,7 @@
     "mssql": "^10.0.2"
   },
   "devDependencies": {
+    "js-yaml": "^4.1.1",
     "nodemon": "^3.0.2"
   }
 }

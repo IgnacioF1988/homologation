@@ -8,7 +8,7 @@ export const config = {
   API_BASE_URL: process.env.REACT_APP_API_URL || 'http://localhost:3001/api',
 
   // Timeouts
-  REQUEST_TIMEOUT: 30000, // 30 segundos
+  REQUEST_TIMEOUT: 60000, // 60 segundos (aumentado para queries pesadas con muchos fondos)
 
   // Retry configuration
   MAX_RETRIES: 3,

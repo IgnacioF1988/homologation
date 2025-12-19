@@ -99,11 +99,6 @@ router.post('/v2/ejecutar', async (req, res) => {
   try {
     const pool = await getInteligenciaPool();
 
-    // NOTA: El SP Process_Funds NO acepta ID_Ejecucion ni ID_Fund
-    // Solo procesa todos los fondos para la fecha dada
-    // Creamos un ID de ejecución sintético para tracking
-    const idEjecucion = Date.now(); // Timestamp como ID temporal
-
     if (idFund) {
       return res.status(400).json({
         success: false,
@@ -111,8 +106,14 @@ router.post('/v2/ejecutar', async (req, res) => {
       });
     }
 
-    const modoEjecucion = 'Todos los fondos';
-    console.log(`[Ejecución ${idEjecucion}] Iniciada para fecha ${fechaReporte} - Modo: ${modoEjecucion}`);
+    // Llamar a sp_Inicializar_Ejecucion para crear ejecución CON fondos
+    const initResult = await pool.request()
+      .input('FechaReporte', sql.NVarChar(10), fechaReporte)
+      .output('ID_Ejecucion', sql.BigInt)
+      .execute('logs.sp_Inicializar_Ejecucion');
+
+    const idEjecucion = initResult.output.ID_Ejecucion;
+    console.log(`[Ejecución ${idEjecucion}] Inicializada correctamente con fondos para fecha ${fechaReporte}`);
 
     // Guardar en memoria para tracking
     activeExecutions.set(idEjecucion, {
@@ -150,16 +151,8 @@ router.post('/v2/ejecutar', async (req, res) => {
 // NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
-    // Insertar registro inicial en logs.Ejecuciones con IDENTITY_INSERT
-    await pool.request()
-      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-      .input('FechaReporte', sql.Date, fechaReporte)
-      .query(`
-        SET IDENTITY_INSERT logs.Ejecuciones ON;
-        INSERT INTO logs.Ejecuciones (ID_Ejecucion, FechaReporte, FechaInicio, Estado, Etapa_Actual)
-        VALUES (@ID_Ejecucion, @FechaReporte, GETDATE(), 'EN_PROGRESO', 'INICIANDO');
-        SET IDENTITY_INSERT logs.Ejecuciones OFF;
-      `);
+    // La ejecución ya fue inicializada por sp_Inicializar_Ejecucion
+    // con todos los fondos activos registrados en logs.Ejecucion_Fondos
 
     const request = pool.request();
 
@@ -184,19 +177,8 @@ async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) 
     const estadoFinal = result.returnValue === 0 ? 'COMPLETADO' :
                         result.returnValue === 1 ? 'PARCIAL' : 'ERROR';
 
-    // Actualizar estado en BD
-    await pool.request()
-      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-      .input('Estado', sql.NVarChar, estadoFinal)
-      .query(`
-        UPDATE logs.Ejecuciones
-        SET Estado = @Estado,
-            FechaFin = GETDATE(),
-            Etapa_Actual = 'FINALIZADO'
-        WHERE ID_Ejecucion = @ID_Ejecucion
-      `);
-
-    // Actualizar estado en memoria
+    // Process_Funds ya actualizó la BD mediante sp_Finalizar_Ejecucion
+    // Solo actualizamos el estado en memoria para tracking local
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
       estado: estadoFinal,
@@ -256,12 +238,36 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
       });
     }
 
-    // Obtener fondos con estado
+    // Obtener fondos con estado (solo columnas esenciales para reducir payload)
     const fondosResult = await pool.request()
       .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT
-          ef.*,
+          ef.ID,
+          ef.ID_Ejecucion,
+          ef.ID_Fund,
+          ef.FundShortName,
+          ef.Portfolio_Geneva,
+          ef.Portfolio_CAPM,
+          ef.Portfolio_Derivados,
+          ef.Portfolio_UBS,
+          -- Estados por etapa del pipeline (para visualización de barras)
+          ef.Estado_Extraccion,
+          ef.Estado_Process_IPA,
+          ef.Estado_Process_CAPM,
+          ef.Estado_Process_Derivados,
+          ef.Estado_Process_PNL,
+          ef.Estado_Process_UBS,
+          ef.Estado_Concatenar,
+          -- Estado final
+          ef.Estado_Final,
+          ef.Mensaje_Error,
+          ef.Fin_Procesamiento,
+          -- Flags
+          ef.Requiere_Derivados,
+          ef.Incluir_En_Cubo,
+          ef.Elegible_Reproceso,
+          -- Join FundName
           bf.FundName
         FROM logs.Ejecucion_Fondos ef
         LEFT JOIN dimensionales.BD_Funds bf ON CAST(ef.ID_Fund AS INT) = bf.ID_Fund

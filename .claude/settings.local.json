@@ -38,17 +38,26 @@
       "mcp__filesystem__read_text_file",
       "mcp__filesystem__write_file",
       "mcp__filesystem__list_allowed_directories",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "mcp__filesystem__search_files",
+      "mcp__sqlserver-moneda__list_indexes",
+      "Bash(netstat:*)",
+      "Bash(ls:*)",
+      "Bash(sqlcmd:*)",
+      "Bash(done)",
+      "Bash(move quick_test.js server )",
+      "Bash(move test_pipeline_v2.js server)",
+      "Bash(npm run test:full:*)"
     ],
     "deny": [],
     "ask": []
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "playwright",
     "exa",
     "sqlserver-moneda",
     "filesystem",
     "chrome-devtools"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }
