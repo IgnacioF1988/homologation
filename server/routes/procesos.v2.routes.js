@@ -8,6 +8,8 @@
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
+const { FundOrchestrator } = require('../services/orchestration');
+const { ExecutionTracker, LoggingService } = require('../services/tracking');
 
 // Pool para Inteligencia_Producto_Dev
 let inteligenciaPool = null;
@@ -147,46 +149,76 @@ router.post('/v2/ejecutar', async (req, res) => {
   }
 });
 
-// Función para ejecutar el proceso en background
-// NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
+// Función para ejecutar el proceso en background usando Pipeline V2
+// NUEVO: Usa FundOrchestrator con servicios individuales en vez de SP batch V1
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
     // La ejecución ya fue inicializada por sp_Inicializar_Ejecucion
     // con todos los fondos activos registrados en logs.Ejecucion_Fondos
 
-    const request = pool.request();
+    console.log(`[Ejecución ${idEjecucion}] Iniciando Pipeline V2 para fecha ${fechaReporte}...`);
 
-    // Solo pasar FechaReporte (único parámetro que acepta el SP)
-    request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
+    // 1. Obtener fondos desde logs.Ejecucion_Fondos
+    const fondosResult = await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .query(`
+        SELECT
+          ID_Fund, FundShortName,
+          Portfolio_Geneva, Portfolio_CAPM, Portfolio_Derivados, Portfolio_UBS,
+          Flag_UBS, Flag_Derivados, Requiere_Derivados
+        FROM logs.Ejecucion_Fondos
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND Incluir_En_Cubo = 1
+        ORDER BY ID_Fund
+      `);
 
-    // Timeout largo para el proceso
-    request.timeout = 600000; // 10 minutos
+    const fondos = fondosResult.recordset;
+    console.log(`[Ejecución ${idEjecucion}] Fondos cargados: ${fondos.length}`);
 
-    // Capturar mensajes PRINT del SP
-    request.on('info', (info) => {
-      if (info.message) {
-        console.log(`[Ejecución ${idEjecucion}] ${info.message}`);
-      }
-    });
+    if (fondos.length === 0) {
+      throw new Error('No hay fondos activos para procesar');
+    }
 
-    // Ejecutar el orquestador (procesa TODOS los fondos)
-    console.log(`[Ejecución ${idEjecucion}] Iniciando Process_Funds para fecha ${fechaReporte}...`);
-    const result = await request.execute('process.Process_Funds');
-    console.log(`[Ejecución ${idEjecucion}] Process_Funds completado con código: ${result.returnValue}`);
+    // 2. Instanciar servicios de tracking
+    const tracker = new ExecutionTracker(pool);
+    const logger = new LoggingService(pool);
 
-    const estadoFinal = result.returnValue === 0 ? 'COMPLETADO' :
-                        result.returnValue === 1 ? 'PARCIAL' : 'ERROR';
+    // 3. Crear y ejecutar orquestador V2
+    const orchestrator = new FundOrchestrator(
+      idEjecucion,
+      fechaReporte,
+      fondos,
+      pool,
+      tracker,
+      logger
+    );
 
-    // Process_Funds ya actualizó la BD mediante sp_Finalizar_Ejecucion
-    // Solo actualizamos el estado en memoria para tracking local
+    await orchestrator.initialize();
+    console.log(`[Ejecución ${idEjecucion}] FundOrchestrator V2 inicializado`);
+
+    const result = await orchestrator.execute();
+    console.log(`[Ejecución ${idEjecucion}] FundOrchestrator V2 completado exitosamente`);
+
+    // 4. Actualizar estado final en BD
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .query(`
+        UPDATE logs.Ejecuciones
+        SET Estado = 'COMPLETADO',
+            Etapa_Actual = 'COMPLETADO',
+            FechaFin = GETDATE()
+        WHERE ID_Ejecucion = @ID_Ejecucion
+      `);
+
+    // 5. Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
-      estado: estadoFinal,
+      estado: 'COMPLETADO',
       finalizadoEn: new Date(),
     });
 
   } catch (err) {
-    console.error(`[Ejecución ${idEjecucion}] Error:`, err);
+    console.error(`[Ejecución ${idEjecucion}] Error en Pipeline V2:`, err);
 
     // Marcar ejecución como error en BD
     try {
@@ -204,6 +236,7 @@ async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) 
       console.error('Error actualizando estado:', updateErr);
     }
 
+    // Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
       estado: 'ERROR',

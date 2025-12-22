@@ -142,12 +142,8 @@ class BasePipelineService {
     // Agregar parámetros de entrada
     request.input('ID_Ejecucion', sql.BigInt, idEjecucion);
     request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
-    // FIX: Convert ID_Fund from string to INT (comes as string from logs.Ejecucion_Fondos)
-    const idFundInt = parseInt(fund.ID_Fund, 10);
-    if (isNaN(idFundInt)) {
-      throw new Error(`ID_Fund inválido para conversión a INT: ${fund.ID_Fund}`);
-    }
-    request.input('ID_Fund', sql.Int, idFundInt);
+    // ID_Fund viene como INT desde logs.Ejecucion_Fondos (después de migración SQL)
+    request.input('ID_Fund', sql.Int, fund.ID_Fund);
 
     // Agregar parámetros específicos según inputFields
     if (spConfig.inputFields) {

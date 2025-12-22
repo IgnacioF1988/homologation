@@ -84,7 +84,7 @@ class ExecutionTracker {
         const fundRequest = this.pool.request();
         await fundRequest
           .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-          .input('ID_Fund', sql.VarChar(50), String(fondo.ID_Fund))
+          .input('ID_Fund', sql.Int, fondo.ID_Fund)
           .input('FundShortName', sql.NVarChar(100), fondo.FundShortName)
           .input('Portfolio_Geneva', sql.NVarChar(50), fondo.Portfolio_Geneva)
           .input('Portfolio_CAPM', sql.NVarChar(50), fondo.Portfolio_CAPM || null)
@@ -201,7 +201,7 @@ class ExecutionTracker {
       const request = this.pool.request();
       await request
         .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .input('ID_Fund', sql.VarChar(50), String(idFund))
+        .input('ID_Fund', sql.Int, idFund)
         .input('Estado', sql.NVarChar(50), estado)
         .query(`
           UPDATE logs.Ejecucion_Fondos
@@ -237,7 +237,7 @@ class ExecutionTracker {
       const request = this.pool.request();
       await request
         .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .input('ID_Fund', sql.VarChar(50), String(idFund))
+        .input('ID_Fund', sql.Int, idFund)
         .input('Duration', sql.Int, duration)
         .query(`
           UPDATE logs.Ejecucion_Fondos
@@ -276,7 +276,7 @@ class ExecutionTracker {
       const request = this.pool.request();
       await request
         .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .input('ID_Fund', sql.VarChar(50), String(idFund))
+        .input('ID_Fund', sql.Int, idFund)
         .input('ErrorStep', sql.NVarChar(100), errorStep)
         .input('ErrorMessage', sql.NVarChar(sql.MAX), errorMessage)
         .input('Duration', sql.Int, duration)
@@ -318,7 +318,7 @@ class ExecutionTracker {
       const request = this.pool.request();
       await request
         .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .input('ID_Fund', sql.VarChar(50), String(idFund))
+        .input('ID_Fund', sql.Int, idFund)
         .input('ErrorStep', sql.NVarChar(100), errorStep)
         .input('ErrorMessage', sql.NVarChar(sql.MAX), errorMessage)
         .query(`

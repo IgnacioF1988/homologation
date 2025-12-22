@@ -179,7 +179,7 @@ class LoggingService {
 
       // Definir columnas (deben coincidir EXACTAMENTE con logs.Ejecucion_Logs)
       table.columns.add('ID_Ejecucion', sql.BigInt, { nullable: false });
-      table.columns.add('ID_Fund', sql.VarChar(50), { nullable: true });
+      table.columns.add('ID_Fund', sql.Int, { nullable: true });
       table.columns.add('Timestamp', sql.DateTime, { nullable: true });
       table.columns.add('Nivel', sql.VarChar(10), { nullable: false });
       table.columns.add('Categoria', sql.VarChar(30), { nullable: false });
