@@ -47,7 +47,9 @@
       "Bash(done)",
       "Bash(move quick_test.js server )",
       "Bash(move test_pipeline_v2.js server)",
-      "Bash(npm run test:full:*)"
+      "Bash(npm run test:full:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

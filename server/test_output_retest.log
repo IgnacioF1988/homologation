@@ -1,0 +1,217 @@
+
+[36m═════════════════════════════════════════════════════════════════[0m
+[36m[1m TEST DEL PIPELINE ETL DE FONDOS                                 [0m
+[36m═════════════════════════════════════════════════════════════════[0m
+
+[1mConfiguración del Test:[0m
+  Fecha: 2025-10-24
+  Fondo: MRCLP (Moneda Renta CLP)
+  API: http://localhost:3001/api
+  Polling: cada 3s
+  Timeout: 600s
+
+[34mℹ Paso 1: Validando fondo en BD...[0m
+[32m✓ Fondo MRCLP encontrado (ID_Fund: 20)[0m
+[34mℹ 
+Paso 2: Iniciando ejecución del pipeline...[0m
+[34mℹ Iniciando ejecución para fecha: 2025-10-24...[0m
+[32m✓ Ejecución iniciada: ID #1766174087292[0m
+[34mℹ Estado inicial: EN_PROGRESO[0m
+[34mℹ 
+Paso 3: Monitoreando progreso en tiempo real...[0m
+[34mℹ Iniciando monitoreo en tiempo real...
+[0m
+┌───────────────────────────────────────────────────────────────┐
+│ [1mMONITOREO: Ejecución #1766174087292                           [0m│
+├───────────────────────────────────────────────────────────────┤
+│ Fecha: 2025-10-24 | Fondo: MRCLP (Moneda Renta CLP)           │
+│ Tiempo: 00:04 | Estado: EN_PROGRESO                           │
+│                                                               │
+│ PROGRESO MRCLP:                                               │
+│     EXTRACCION          PENDIENTE                             │
+│     VALIDACION          PENDIENTE                             │
+│     PROCESS_IPA         PENDIENTE                             │
+│         IPA_01 RescatarLocalPrice      PENDIENTE              │
+│         IPA_02 AjusteSONA              PENDIENTE              │
+│         IPA_03 RenombrarCxCCxP         PENDIENTE              │
+│         IPA_04 TratamientoSuciedades   PENDIENTE              │
+│         IPA_05 EliminarCajasMTM        PENDIENTE              │
+│         IPA_06 CrearDimensiones        PENDIENTE              │
+│         IPA_07 AgruparRegistros        PENDIENTE              │
+│     PROCESS_CAPM        PENDIENTE                             │
+│     PROCESS_DERIVADOS   PENDIENTE                             │
+│     PROCESS_PNL         PENDIENTE                             │
+│     PROCESS_UBS         PENDIENTE                             │
+│     CONCATENAR          PENDIENTE                             │
+│                                                               │
+│ RESUMEN GENERAL (Todos los fondos):                           │
+│   Total: 43 | Exitosos: 0 | Fallidos: 0 | En progreso: 43     │
+└───────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│ [1mMONITOREO: Ejecución #1766174087292                           [0m│
+├───────────────────────────────────────────────────────────────┤
+│ Fecha: 2025-10-24 | Fondo: MRCLP (Moneda Renta CLP)           │
+│ Tiempo: 00:07 | Estado: ERROR                                 │
+│                                                               │
+│ PROGRESO MRCLP:                                               │
+│     EXTRACCION          PENDIENTE                             │
+│     VALIDACION          PENDIENTE                             │
+│     PROCESS_IPA         PENDIENTE                             │
+│         IPA_01 RescatarLocalPrice      PENDIENTE              │
+│         IPA_02 AjusteSONA              PENDIENTE              │
+│         IPA_03 RenombrarCxCCxP         PENDIENTE              │
+│         IPA_04 TratamientoSuciedades   PENDIENTE              │
+│         IPA_05 EliminarCajasMTM        PENDIENTE              │
+│         IPA_06 CrearDimensiones        PENDIENTE              │
+│         IPA_07 AgruparRegistros        PENDIENTE              │
+│     PROCESS_CAPM        PENDIENTE                             │
+│     PROCESS_DERIVADOS   PENDIENTE                             │
+│     PROCESS_PNL         PENDIENTE                             │
+│     PROCESS_UBS         PENDIENTE                             │
+│     CONCATENAR          PENDIENTE                             │
+│                                                               │
+│ RESUMEN GENERAL (Todos los fondos):                           │
+│   Total: 43 | Exitosos: 0 | Fallidos: 43 | En progreso: 0     │
+└───────────────────────────────────────────────────────────────┘
+[34mℹ Último cambio: Estado_Final → ERROR[0m
+[32m✓ 
+✓ Ejecución completada![0m
+[34mℹ 
+Paso 4: Verificando outputs en base de datos...[0m
+
+[36m═════════════════════════════════════════════════════════════════[0m
+[36m[1m VERIFICACIÓN DE OUTPUTS EN BD                                   [0m
+[36m═════════════════════════════════════════════════════════════════[0m
+
+[34mℹ Verificando estado final del fondo en BD...[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT
+        Estado_Final,
+        Estado...[0m
+[33m⚠ No se pudo verificar estado en BD (query falló o sin datos)[0m
+[34mℹ Verificando tablas de staging...[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM staging...[0m
+[33m⚠ Tabla staging.IPA no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ staging.IPA: Sin registros[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM staging...[0m
+[33m⚠ Tabla staging.CAPM no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ staging.CAPM: Sin registros[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM staging...[0m
+[33m⚠ Tabla staging.PNL no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ staging.PNL: Sin registros[0m
+[34mℹ Verificando tablas de process...[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM process...[0m
+[33m⚠ Tabla process.TBL_IPA no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ process.TBL_IPA: Sin registros[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM process...[0m
+[33m⚠ Tabla process.TBL_PNL no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ process.TBL_PNL: Sin registros[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT COUNT(*) as Total
+      FROM process...[0m
+[33m⚠ Tabla process.TBL_PNL_IPA no retornó datos para ID_Ejecucion=1766174087292, ID_Fund=20[0m
+[33m⚠ process.TBL_PNL_IPA: Sin registros[0m
+[34mℹ Verificando métricas de validación...[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT
+        Etapa,
+        Metrica_Nombr...[0m
+[32m✓ Todas las métricas de validación OK (o sin métricas)[0m
+[34mℹ Verificando logs de error...[0m
+[33m⚠ [Simulación] Query SQL ejecutada (usar MCP para datos reales): 
+      SELECT TOP 10
+        Timestamp,
+        Ni...[0m
+[32m✓ Sin logs de error[0m
+
+[36m═════════════════════════════════════════════════════════════════[0m
+[36m[1m GENERANDO REPORTE FINAL                                         [0m
+[36m═════════════════════════════════════════════════════════════════[0m
+
+═════════════════════════════════════════════════════════════════
+                  REPORTE FINAL DE EJECUCIÓN
+═════════════════════════════════════════════════════════════════
+
+INFORMACIÓN GENERAL:
+─────────────────────────────────────────────────────────────────
+  ID Ejecución: 1766174087292
+  Fecha Reporte: 2025-10-24
+  Fondo: MRCLP (Moneda Renta CLP)
+  Estado Final: ERROR
+  Duración: N/A
+
+─────────────────────────────────────────────────────────────────
+RESULTADOS POR ETAPA:
+─────────────────────────────────────────────────────────────────
+
+  EXTRACCION           PENDIENTE
+  VALIDACION           PENDIENTE
+  PROCESS_IPA          PENDIENTE
+  PROCESS_CAPM         PENDIENTE
+  PROCESS_DERIVADOS    PENDIENTE
+  PROCESS_PNL          PENDIENTE
+  PROCESS_UBS          PENDIENTE
+  CONCATENAR           PENDIENTE
+
+─────────────────────────────────────────────────────────────────
+VERIFICACIÓN DE DATOS EN BD:
+─────────────────────────────────────────────────────────────────
+
+  ✗ Registros en staging.IPA            0
+  ✗ Registros en staging.CAPM           0
+  ✗ Registros en staging.PNL            0
+  ✗ Registros en process.TBL_IPA        0
+  ✗ Registros en process.TBL_PNL        0
+  ✗ Registros en process.TBL_PNL_IPA    0
+
+─────────────────────────────────────────────────────────────────
+PROBLEMAS DETECTADOS:
+─────────────────────────────────────────────────────────────────
+
+─────────────────────────────────────────────────────────────────
+QUERIES SQL PARA VERIFICACIÓN MANUAL:
+─────────────────────────────────────────────────────────────────
+
+-- Ver estado completo del fondo
+SELECT * FROM logs.Ejecucion_Fondos 
+WHERE ID_Ejecucion = 1766174087292 AND ID_Fund = '20';
+
+-- Ver registros IPA generados
+SELECT TOP 100 * FROM staging.IPA 
+WHERE ID_Ejecucion = 1766174087292 AND ID_Fund = '20';
+
+-- Ver logs de error
+SELECT * FROM logs.Ejecucion_Logs 
+WHERE ID_Ejecucion = 1766174087292 AND ID_Fund = '20' AND Nivel = 'ERROR';
+
+═════════════════════════════════════════════════════════════════
+                           CONCLUSIÓN
+═════════════════════════════════════════════════════════════════
+
+Estado: ERROR
+
+Funcionó correctamente:
+
+═════════════════════════════════════════════════════════════════
+
+[32m✓ Reporte guardado en: test_result_2025-12-22T14-00-59.txt[0m
+
+[36m═════════════════════════════════════════════════════════════════[0m
+[36m[1m TEST COMPLETADO                                                 [0m
+[36m═════════════════════════════════════════════════════════════════[0m
+
+[32m✓ ID de Ejecución: 1766174087292[0m
+[32m✓ Estado Final: ERROR[0m
+[32m✓ Reporte guardado en: C:\Users\ifuentes\homologation\server\test_result_2025-12-22T14-00-59.txt[0m
+[31m✗ 
+✗ La ejecución falló con errores[0m
