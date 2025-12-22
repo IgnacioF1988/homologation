@@ -49,7 +49,11 @@
       "Bash(move test_pipeline_v2.js server)",
       "Bash(npm run test:full:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(if [ -f server/.env ])",
+      "Bash(then head -20 server/.env)",
+      "Bash(else echo \"No .env file found\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []
