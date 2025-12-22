@@ -6,7 +6,6 @@
 import React, { useMemo } from 'react';
 import { Box, Typography, Collapse, LinearProgress } from '@mui/material';
 import { ESTADO_COLORS, ESTADO_ICONS } from '../../utils/constants';
-import { SUB_STAGE_CONFIG } from '../../utils/pipelineConfig';
 import { parseSubStages } from '../../utils/pipelineParser';
 import { colors } from '../../../../styles/theme';
 
@@ -25,10 +24,9 @@ export const FundSubStages = ({
   visiblePhases = ['PROCESS_IPA', 'PROCESS_CAPM', 'PROCESS_DERIVADOS', 'PROCESS_PNL', 'PROCESS_UBS'],
   sx = {},
 }) => {
-  if (!fondoBackend) return null;
-
-  // Parsear sub-etapas de todas las fases visibles
+  // Parsear sub-etapas de todas las fases visibles (ANTES de condicionales - React Hooks rules)
   const phasesData = useMemo(() => {
+    if (!fondoBackend) return [];
     return visiblePhases
       .map(phaseId => {
         const subStages = parseSubStages(fondoBackend, phaseId);

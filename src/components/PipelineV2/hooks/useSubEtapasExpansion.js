@@ -15,7 +15,6 @@ import { useState, useCallback } from 'react';
  */
 export const useSubEtapasExpansion = (options = {}) => {
   const {
-    expandByDefault = false,
     initialExpanded = [],
   } = options;
 

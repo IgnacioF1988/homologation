@@ -31,14 +31,15 @@ export const FundRoadmap = ({
   onStageClick,
   sx = {},
 }) => {
+  // Determinar etapa actual (ANTES de condicionales - React Hooks rules)
+  const currentStageInfo = useMemo(() => {
+    if (!fondo) return null;
+    return getCurrentStage(fondo);
+  }, [fondo]);
+
   if (!fondo || !fondo.stages) {
     return null;
   }
-
-  // Determinar etapa actual
-  const currentStageInfo = useMemo(() => {
-    return getCurrentStage(fondo);
-  }, [fondo]);
 
   // Tamaños para modo compacto
   const actualNodeSize = compact ? nodeSize * 0.8 : nodeSize;

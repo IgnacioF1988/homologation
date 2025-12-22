@@ -10,7 +10,7 @@ import {
   parseSubStages,
   parseAllSubStages,
 } from '../utils/pipelineParser';
-import { computeHash, detectChanges } from '../utils/pipelineChangeDetector';
+import { detectChanges } from '../utils/pipelineChangeDetector';
 
 /**
  * useFondoParser - Hook de parsing con cache

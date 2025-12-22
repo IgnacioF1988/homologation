@@ -5,9 +5,9 @@
  */
 
 import React from 'react';
-import { PipelineExecutionProvider } from './PipelineExecutionContext';
-import { PipelineFondosProvider } from './PipelineFondosContext';
-import { PipelineUIProvider } from './PipelineUIContext';
+import { PipelineExecutionProvider, usePipelineExecution } from './PipelineExecutionContext';
+import { PipelineFondosProvider, usePipelineFondos } from './PipelineFondosContext';
+import { PipelineUIProvider, usePipelineUI } from './PipelineUIContext';
 
 /**
  * PipelineProvider - Wrapper de los 3 contexts

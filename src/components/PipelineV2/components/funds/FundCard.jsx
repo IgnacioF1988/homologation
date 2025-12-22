@@ -41,31 +41,31 @@ export const FundCard = memo(({
     toggleSubStageExpansion,
   } = usePipelineUI();
 
+  // Callbacks (ANTES de condicionales - React Hooks rules)
+  const handleToggleExpand = useCallback(() => {
+    if (!fondo) return;
+    toggleFundExpansion(fondo.id);
+  }, [fondo, toggleFundExpansion]);
+
+  const handleToggleSubStages = useCallback(() => {
+    if (!fondo) return;
+    toggleSubStageExpansion(fondo.id);
+  }, [fondo, toggleSubStageExpansion]);
+
+  const handleReprocess = useCallback(() => {
+    if (!fondo || !onReprocess) return;
+    onReprocess(fondo);
+  }, [fondo, onReprocess]);
+
+  const handleShowDetails = useCallback(() => {
+    if (!fondo || !onShowDetails) return;
+    onShowDetails(fondo);
+  }, [fondo, onShowDetails]);
+
   if (!fondo) return null;
 
   const isExpanded = isFundExpanded(fondo.id);
   const isSubStagesExpanded = isSubStageExpanded(fondo.id);
-
-  // Callbacks
-  const handleToggleExpand = useCallback(() => {
-    toggleFundExpansion(fondo.id);
-  }, [fondo.id, toggleFundExpansion]);
-
-  const handleToggleSubStages = useCallback(() => {
-    toggleSubStageExpansion(fondo.id);
-  }, [fondo.id, toggleSubStageExpansion]);
-
-  const handleReprocess = useCallback(() => {
-    if (onReprocess) {
-      onReprocess(fondo);
-    }
-  }, [fondo, onReprocess]);
-
-  const handleShowDetails = useCallback(() => {
-    if (onShowDetails) {
-      onShowDetails(fondo);
-    }
-  }, [fondo, onShowDetails]);
 
   // Determinar elevación basada en estado
   const elevation = getCardElevation(fondo);

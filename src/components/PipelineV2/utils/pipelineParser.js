@@ -3,7 +3,7 @@
  * Convierte datos backend (45+ campos) a modelo UI optimizado
  */
 
-import { FINAL_STATUS, ESTADO_STRINGS, FLAG_BITS, hasFlag } from './constants';
+import { FINAL_STATUS, FLAG_BITS, hasFlag } from './constants';
 import { PIPELINE_STAGES, SUB_STAGE_CONFIG } from './pipelineConfig';
 
 /**

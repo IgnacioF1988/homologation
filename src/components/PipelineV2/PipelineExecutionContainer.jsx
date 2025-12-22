@@ -3,8 +3,8 @@
  * Integra todos los componentes y hooks del Pipeline ETL v2
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import { Box, Container } from '@mui/material';
+import React, { useState, useCallback } from 'react';
+import { Container } from '@mui/material';
 import { PipelineProvider } from './contexts/PipelineProvider';
 import PipelineHeader from './components/layout/PipelineHeader';
 import PipelineRoadmap from './components/roadmap/PipelineRoadmap';
@@ -17,9 +17,7 @@ import EmptyState from './components/shared/EmptyState';
 import useExecutionState from './hooks/useExecutionState';
 import useExecutionPolling from './hooks/useExecutionPolling';
 import useExecutionActions from './hooks/useExecutionActions';
-import useFondoParser from './hooks/useFondoParser';
 import useFondoFilters from './hooks/useFondoFilters';
-import { colors } from '../../styles/theme';
 
 /**
  * PipelineExecutionContainer - Componente principal del Pipeline v2

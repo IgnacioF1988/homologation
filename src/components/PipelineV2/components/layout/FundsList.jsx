@@ -3,7 +3,7 @@
  * Lista de fondos con virtual scrolling para manejar 50-100+ fondos eficientemente
  */
 
-import React, { useMemo, useRef } from 'react';
+import React, { useRef } from 'react';
 import { Box, Typography } from '@mui/material';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import FundCard from '../funds/FundCard';
@@ -39,6 +39,14 @@ export const FundsList = ({
 }) => {
   const parentRef = useRef(null);
 
+  // Configurar virtualizador (ANTES de condicionales - React Hooks rules)
+  const virtualizer = useVirtualizer({
+    count: fondoIds.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => estimatedItemHeight,
+    overscan: 5, // Pre-render 5 items arriba/abajo
+  });
+
   // Si no hay fondos, mostrar estado vacío
   if (!fondosMap || fondosMap.size === 0) {
     return (
@@ -58,14 +66,6 @@ export const FundsList = ({
       />
     );
   }
-
-  // Configurar virtualizador
-  const virtualizer = useVirtualizer({
-    count: fondoIds.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => estimatedItemHeight,
-    overscan: 5, // Pre-render 5 items arriba/abajo
-  });
 
   return (
     <Box
