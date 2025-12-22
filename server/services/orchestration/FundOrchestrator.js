@@ -62,14 +62,67 @@ class FundOrchestrator {
 
     // 2. Resolver dependencias usando DependencyResolver
     const resolver = new DependencyResolver(this.config.services);
-    this.executionPlan = resolver.resolve(); // [{phase, services, type, name}]
+    const executionOrder = resolver.getExecutionOrder(); // Array de IDs en orden topológico
+
+    console.log(`[FundOrchestrator ${this.idEjecucion}] Orden de ejecución: ${executionOrder.join(' -> ')}`);
+
+    // 3. Agrupar servicios por tipo de ejecución (batch, parallel, sequential)
+    this.executionPlan = this._buildExecutionPlan(executionOrder);
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Plan de ejecución: ${this.executionPlan.length} fases`);
 
-    // 3. Instanciar servicios (IPAService, CAPMService, etc.)
+    // 4. Instanciar servicios (IPAService, CAPMService, etc.)
     this._instantiateServices();
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Inicializado con ${this.fondos.length} fondos`);
+  }
+
+  /**
+   * Construir plan de ejecución agrupando servicios por tipo
+   * - batch: servicios que se ejecutan 1 vez por fecha
+   * - parallel: servicios que se ejecutan por cada fondo en paralelo
+   * - sequential: servicios que se ejecutan 1 vez por fecha en orden
+   *
+   * @param {Array<String>} executionOrder - IDs de servicios en orden topológico
+   * @returns {Array<Object>} - Plan de ejecución [{type, services, name}]
+   * @private
+   */
+  _buildExecutionPlan(executionOrder) {
+    const phases = [];
+    const serviceMap = new Map();
+
+    // Crear mapa de ID -> configuración
+    this.config.services.forEach(svc => {
+      serviceMap.set(svc.id, svc);
+    });
+
+    // Agrupar servicios consecutivos del mismo tipo
+    let currentPhase = null;
+
+    executionOrder.forEach(serviceId => {
+      const serviceConfig = serviceMap.get(serviceId);
+      if (!serviceConfig) {
+        console.warn(`[FundOrchestrator] Servicio ${serviceId} no encontrado en config`);
+        return;
+      }
+
+      const execType = serviceConfig.executionType || 'parallel';
+
+      // Si cambia el tipo de ejecución, crear nueva fase
+      if (!currentPhase || currentPhase.type !== execType) {
+        currentPhase = {
+          type: execType,
+          services: [],
+          name: `${execType.toUpperCase()}_Phase_${phases.length + 1}`
+        };
+        phases.push(currentPhase);
+      }
+
+      // Agregar servicio a la fase actual
+      currentPhase.services.push(serviceId);
+    });
+
+    return phases;
   }
 
   /**
@@ -88,14 +141,15 @@ class FundOrchestrator {
     const PNLService = require('../pipeline/PNLService');
     const UBSService = require('../pipeline/UBSService');
 
-    // Mapear service IDs a clases
+    // Mapear service IDs del config a clases Node.js
+    // Los IDs del config son como "PROCESS_IPA", pero las clases son IPAService
     const serviceClasses = {
-      'IPA': IPAService,
-      'CAPM': CAPMService,
-      'Derivados': DerivadosService,
-      'PNL': PNLService,
-      'UBS': UBSService,
-      // Agregar otros servicios según necesidad
+      'PROCESS_IPA': IPAService,
+      'PROCESS_CAPM': CAPMService,
+      'PROCESS_DERIVADOS': DerivadosService,
+      'PROCESS_PNL': PNLService,
+      'PROCESS_UBS': UBSService,
+      // EXTRACCION, VALIDACION, CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
     };
 
     // Instanciar cada servicio con su config
@@ -108,7 +162,8 @@ class FundOrchestrator {
         );
         console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio instanciado: ${svcConfig.id}`);
       } else {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio no encontrado: ${svcConfig.id}`);
+        // Para servicios sin clase específica, usar un placeholder
+        console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio ${svcConfig.id} sin implementación Node.js (usa SPs directamente)`);
       }
     });
   }
@@ -307,11 +362,12 @@ class FundOrchestrator {
     );
 
     // Registrar error en logs
-    await this.logger.logError(
+    await this.logger.error(
       this.idEjecucion,
       fund.ID_Fund,
       service.name,
-      error.message
+      error.message || error.toString(),
+      error
     );
 
     if (policy === 'STOP_ALL') {
