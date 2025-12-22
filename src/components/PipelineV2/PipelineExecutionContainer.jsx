@@ -35,8 +35,24 @@ const PipelineExecutionContainer = () => {
       console.log('[PipelineContainer] Ejecución iniciada exitosamente:', response);
       setNewExecutionModalOpen(false);
 
-      // Iniciar polling
-      if (response.ID_Ejecucion) {
+      // Inicializar estado de ejecución con datos del POST (response.data)
+      const ejecucionData = response.data || response;
+      if (ejecucionData.ID_Ejecucion) {
+        // Crear objeto con estructura compatible con polling
+        const initialState = {
+          ejecucion: {
+            ID_Ejecucion: ejecucionData.ID_Ejecucion,
+            FechaReporte: ejecucionData.FechaReporte,
+            Estado: ejecucionData.Estado || 'EN_PROGRESO',
+            IniciadoEn: ejecucionData.IniciadoEn || new Date().toISOString(),
+          },
+          fondos: [], // Se cargarán en el primer poll
+        };
+
+        // Actualizar estado
+        executionState.updateFromPolling(initialState);
+
+        // Iniciar polling
         pollingHook.startPolling();
       }
     },
