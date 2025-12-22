@@ -3,7 +3,7 @@
  * Integra todos los componentes y hooks del Pipeline ETL v2
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { Container } from '@mui/material';
 import { PipelineProvider } from './contexts/PipelineProvider';
 import PipelineHeader from './components/layout/PipelineHeader';
@@ -28,9 +28,6 @@ const PipelineExecutionContainer = () => {
 
   // Hook central de estado
   const executionState = useExecutionState();
-
-  // Hook de parsing con cache
-  const parser = useFondoParser();
 
   // Hook de acciones
   const actions = useExecutionActions({
