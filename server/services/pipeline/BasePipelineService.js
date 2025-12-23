@@ -202,6 +202,40 @@ class BasePipelineService {
       return await request.execute(spName);
     }, spConfig);
 
+    // *** CRITICAL: Validar estado de transacción inmediatamente después de cada SP ***
+    // Esto identifica qué SP específico causa uncommittable transactions en concurrencia
+    const postXactState = await transaction.request()
+      .query('SELECT XACT_STATE() as XactState');
+
+    const xactState = postXactState.recordset[0].XactState;
+
+    if (xactState === -1) {
+      // Transacción uncommittable detectada - este SP la causó
+      await this.logError(
+        idEjecucion,
+        fund.ID_Fund,
+        `CRITICAL: ${spName} caused transaction to become uncommittable (XACT_STATE=-1). ` +
+        `This SP likely has constraint violations, trigger errors, or severity 16+ exceptions. ` +
+        `Fund: ${fund.Nombre_Fondo || fund.ID_Fund}`
+      );
+
+      // Rollback inmediato
+      await transaction.rollback();
+
+      throw new Error(
+        `${spName} caused uncommittable transaction (XACT_STATE=-1). ` +
+        `Check for constraint violations, trigger errors, or severe exceptions in SP code.`
+      );
+    } else if (xactState === 0) {
+      // Transacción no activa - unexpected pero no crítico
+      await this.logWarning(
+        idEjecucion,
+        fund.ID_Fund,
+        `${spName} completed but transaction is no longer active (XACT_STATE=0)`
+      );
+    }
+    // xactState === 1 (committable) es el estado esperado - continuar normalmente
+
     // Procesar resultado
     const returnValue = result.returnValue;
     const rowsProcessed = result.output.RowsProcessed || 0;
@@ -258,6 +292,24 @@ class BasePipelineService {
         return await fn();
       } catch (error) {
         lastError = error;
+
+        // *** ENHANCED: Capturar detalles completos del error SQL Server ***
+        const errorDetails = {
+          number: error.number || 'N/A',
+          severity: error.class || 'N/A',
+          state: error.state || 'N/A',
+          message: error.message || 'N/A',
+          procName: error.procName || 'N/A',
+          lineNumber: error.lineNumber || 'N/A',
+          code: error.code || 'N/A'
+        };
+
+        console.error(
+          `[${this.id}] SQL Server Error Details: ` +
+          `Number=${errorDetails.number}, Severity=${errorDetails.severity}, State=${errorDetails.state}, ` +
+          `Proc=${errorDetails.procName}, Line=${errorDetails.lineNumber}, Code=${errorDetails.code}, ` +
+          `Message="${errorDetails.message}"`
+        );
 
         // Verificar si es error retriable
         const isDeadlock = error.number === 1205; // SQL deadlock

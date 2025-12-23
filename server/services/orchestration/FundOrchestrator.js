@@ -253,7 +253,7 @@ class FundOrchestrator {
   async _executeParallelPhase(phase) {
     // Concurrencia reducida para evitar sobrecarga
     // RCSI (Read Committed Snapshot Isolation) habilitado en BD elimina bloqueos de lectura
-    // TEMPORAL: Reducido a 1 para debug de uncommittable transactions
+    // CONSERVATIVE: Set to 1 pending further testing (2 successful runs with concurrency=3, need more evidence)
     const concurrencyLimit = Math.min(this.fondos.length, 1);
     const limit = pLimit(concurrencyLimit);
 
