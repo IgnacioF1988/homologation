@@ -664,3 +664,4 @@ class BasePipelineService {
 }
 
 module.exports = BasePipelineService;
+module.exports.StandByRequiredError = StandByRequiredError;
