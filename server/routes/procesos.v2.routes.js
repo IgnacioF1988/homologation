@@ -7,42 +7,12 @@
 
 const express = require('express');
 const router = express.Router();
-const sql = require('mssql');
+const { getPool, sql } = require('../config/database');
 const { FundOrchestrator } = require('../services/orchestration');
 const { ExecutionTracker, LoggingService } = require('../services/tracking');
 
-// Pool para Inteligencia_Producto_Dev
-let inteligenciaPool = null;
-
-const getInteligenciaPool = async () => {
-  if (inteligenciaPool && inteligenciaPool.connected) {
-    return inteligenciaPool;
-  }
-
-  const config = {
-    server: process.env.DB_SERVER,
-    database: 'Inteligencia_Producto_Dev',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    port: parseInt(process.env.DB_PORT) || 1433,
-    options: {
-      encrypt: process.env.DB_ENCRYPT === 'true',
-      trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
-      enableArithAbort: true,
-    },
-    pool: {
-      max: 10,
-      min: 0,
-      idleTimeoutMillis: 30000,
-    },
-    requestTimeout: 600000, // 10 minutos para procesos largos
-  };
-
-  inteligenciaPool = new sql.ConnectionPool(config);
-  await inteligenciaPool.connect();
-  console.log('Conectado a Inteligencia_Producto_Dev (v2)');
-  return inteligenciaPool;
-};
+// Usa el pool centralizado de Inteligencia_Producto_Dev
+const getInteligenciaPool = getPool;
 
 // ============================================
 // ALMACENAMIENTO EN MEMORIA PARA POLLING

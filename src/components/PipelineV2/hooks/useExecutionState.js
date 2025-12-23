@@ -138,6 +138,56 @@ export const useExecutionState = () => {
     };
   }, [execution.ejecucion]);
 
+  /**
+   * Computed: generalStats con fallback a datos de ejecución
+   * Si fondosMap está vacío, usar datos directamente de logs.Ejecuciones
+   * Esto soluciona el problema de NaN% cuando el parser no ha poblado fondosMap
+   */
+  const generalStats = useMemo(() => {
+    // Si fondosMap tiene datos, usar estadísticas calculadas del parser
+    if (fondos.fondosMap.size > 0) {
+      return fondos.generalStats;
+    }
+
+    // Si fondosMap vacío pero ejecución tiene datos, usar datos de logs.Ejecuciones
+    if (execution.ejecucion) {
+      const ejecucion = execution.ejecucion;
+      const fondosExitosos = ejecucion.FondosExitosos || 0;
+      const fondosFallidos = ejecucion.FondosFallidos || 0;
+      const fondosWarning = ejecucion.FondosWarning || 0;
+      const fondosOmitidos = ejecucion.FondosOmitidos || 0;
+
+      return {
+        total: ejecucion.TotalFondos || 0,
+        ok: fondosExitosos,
+        error: fondosFallidos,
+        warning: fondosWarning,
+        omitido: fondosOmitidos,
+        completados: fondosExitosos + fondosFallidos + fondosWarning,
+        enProgreso: 0, // No disponible en logs.Ejecuciones
+        pendiente: 0,  // No disponible en logs.Ejecuciones
+        parcial: 0,    // No disponible en logs.Ejecuciones
+        porcentajeExito: (fondosExitosos + fondosFallidos + fondosWarning) > 0
+          ? Math.round((fondosExitosos / (fondosExitosos + fondosFallidos + fondosWarning)) * 100)
+          : 0,
+      };
+    }
+
+    // Fallback: stats vacíos
+    return {
+      total: 0,
+      ok: 0,
+      error: 0,
+      warning: 0,
+      omitido: 0,
+      completados: 0,
+      enProgreso: 0,
+      pendiente: 0,
+      parcial: 0,
+      porcentajeExito: 0,
+    };
+  }, [fondos.fondosMap.size, fondos.generalStats, execution.ejecucion]);
+
   // Return unified state
   return {
     // Estado de ejecución
@@ -155,7 +205,7 @@ export const useExecutionState = () => {
 
     // Estadísticas
     stageStats: fondos.stageStats,
-    generalStats: fondos.generalStats,
+    generalStats, // Usar generalStats computado con fallback
     overallProgress,
     elapsedTime,
 

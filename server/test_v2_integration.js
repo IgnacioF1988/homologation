@@ -61,7 +61,7 @@ async function testV2Integration() {
     // ====================================
     console.log('🚀 [PASO 2] Inicializando ejecución...');
 
-    const fechaReporte = '2024-12-01'; // Fecha de prueba
+    const fechaReporte = '2025-10-24'; // Fecha con datos reales en extract.IPA
 
     const initResult = await pool.request()
       .input('FechaReporte', sql.NVarChar(10), fechaReporte)
@@ -73,14 +73,14 @@ async function testV2Integration() {
     console.log();
 
     // ====================================
-    // PASO 3: Cargar fondos (TOP 5)
+    // PASO 3: Cargar TODOS los fondos (43 fondos)
     // ====================================
-    console.log('📊 [PASO 3] Cargando fondos de prueba (TOP 5)...');
+    console.log('📊 [PASO 3] Cargando TODOS los fondos...');
 
     const fondosResult = await pool.request()
       .input('ID_Ejecucion', sql.BigInt, idEjecucion)
       .query(`
-        SELECT TOP 5
+        SELECT
           ID_Fund,
           FundShortName,
           Portfolio_Geneva,
@@ -185,8 +185,10 @@ async function testV2Integration() {
           FechaFin,
           DATEDIFF(SECOND, FechaInicio, FechaFin) AS DuracionSegundos,
           TotalFondos,
-          FondosCompletados,
-          FondosConError
+          FondosExitosos,
+          FondosFallidos,
+          FondosOmitidos,
+          FondosWarning
         FROM logs.Ejecuciones
         WHERE ID_Ejecucion = @ID_Ejecucion
       `);
@@ -199,8 +201,10 @@ async function testV2Integration() {
       console.log('  Etapa Actual:', estado.Etapa_Actual);
       console.log('  Duración:', estado.DuracionSegundos, 'segundos');
       console.log('  Total Fondos:', estado.TotalFondos);
-      console.log('  Completados:', estado.FondosCompletados);
-      console.log('  Con Error:', estado.FondosConError);
+      console.log('  Exitosos:', estado.FondosExitosos);
+      console.log('  Fallidos:', estado.FondosFallidos);
+      console.log('  Omitidos:', estado.FondosOmitidos);
+      console.log('  Warning:', estado.FondosWarning);
       console.log('  ─────────────────────────────────────');
     }
     console.log();
@@ -213,18 +217,21 @@ async function testV2Integration() {
         SELECT
           ID_Fund,
           FundShortName,
-          Estado_Actual,
-          Etapa_Actual,
-          DATEDIFF(SECOND, Fecha_Inicio, Fecha_Fin) AS DuracionSegundos
+          Estado_Final,
+          Ultimo_Paso_Exitoso,
+          Paso_Con_Error,
+          Mensaje_Error,
+          DATEDIFF(MILLISECOND, Inicio_Procesamiento, Fin_Procesamiento) / 1000.0 AS DuracionSegundos
         FROM logs.Ejecucion_Fondos
         WHERE ID_Ejecucion = @ID_Ejecucion
         ORDER BY ID_Fund
       `);
 
     fondosEstadoResult.recordset.forEach(fondo => {
-      const statusIcon = fondo.Estado_Actual === 'COMPLETADO' ? '✓' :
-                         fondo.Estado_Actual === 'ERROR' ? '✗' : '⚠';
-      console.log(`  ${statusIcon} [${fondo.ID_Fund}] ${fondo.FundShortName}: ${fondo.Estado_Actual} (${fondo.DuracionSegundos || 0}s)`);
+      const statusIcon = fondo.Estado_Final === 'COMPLETADO' ? '✓' :
+                         fondo.Estado_Final === 'ERROR' ? '✗' : '⚠';
+      const errorInfo = fondo.Paso_Con_Error ? ` (Error en: ${fondo.Paso_Con_Error})` : '';
+      console.log(`  ${statusIcon} [${fondo.ID_Fund}] ${fondo.FundShortName}: ${fondo.Estado_Final || 'PENDIENTE'} (${fondo.DuracionSegundos || 0}s)${errorInfo}`);
     });
     console.log();
 
@@ -290,19 +297,26 @@ async function testV2Integration() {
     console.log('========================================');
 
     const finalEstado = estadoResult.recordset[0];
-    const allCompleted = finalEstado.FondosCompletados === finalEstado.TotalFondos;
-    const hasErrors = finalEstado.FondosConError > 0;
+    const hasFailures = finalEstado.FondosFallidos > 0;
+    const hasWarnings = finalEstado.FondosWarning > 0;
+    const allProcessed = (finalEstado.FondosExitosos + finalEstado.FondosFallidos + finalEstado.FondosOmitidos) === finalEstado.TotalFondos;
 
     console.log(`Ejecución ID: ${idEjecucion.toString()}`);
     console.log(`Fecha Reporte: ${fechaReporte}`);
-    console.log(`Fondos Procesados: ${finalEstado.FondosCompletados}/${finalEstado.TotalFondos}`);
+    console.log(`Fondos Procesados: ${finalEstado.FondosExitosos}/${finalEstado.TotalFondos} exitosos`);
+    console.log(`Fondos Fallidos: ${finalEstado.FondosFallidos}`);
+    console.log(`Fondos Omitidos: ${finalEstado.FondosOmitidos}`);
+    console.log(`Fondos Warning: ${finalEstado.FondosWarning}`);
     console.log(`Duración: ${finalEstado.DuracionSegundos}s (${(durationMs / 1000).toFixed(2)}s medido)`);
     console.log(`Estado Final: ${finalEstado.Estado}`);
 
-    if (allCompleted && !hasErrors) {
-      console.log('\n✅ TEST EXITOSO - Todos los fondos completados sin errores');
-    } else if (hasErrors) {
-      console.log(`\n⚠️  TEST PARCIAL - ${finalEstado.FondosConError} fondos con error`);
+    if (allProcessed && !hasFailures) {
+      console.log('\n✅ TEST EXITOSO - Todos los fondos procesados sin errores fatales');
+      if (hasWarnings) {
+        console.log(`   ⚠️  ${finalEstado.FondosWarning} fondos con warnings (esperado para UBS con policy CONTINUE)`);
+      }
+    } else if (hasFailures) {
+      console.log(`\n⚠️  TEST PARCIAL - ${finalEstado.FondosFallidos} fondos fallidos`);
     } else {
       console.log('\n❌ TEST FALLIDO - No se completaron todos los fondos');
     }

@@ -341,8 +341,13 @@ class ExecutionTracker {
    * Actualizar estado general de la ejecución
    *
    * @param {BigInt} idEjecucion - ID de la ejecución
-   * @param {String} estado - Estado ('EN_PROGRESO', 'COMPLETADO', 'ERROR')
-   * @param {Object} stats - Estadísticas opcionales (fondos_ok, fondos_error, etc.)
+   * @param {String} estado - Estado ('EN_PROGRESO', 'COMPLETADO', 'ERROR', 'PARCIAL')
+   * @param {Object} stats - Estadísticas opcionales
+   * @param {Number} stats.fondosOK - Fondos completados exitosamente
+   * @param {Number} stats.fondosError - Fondos con error
+   * @param {Number} stats.fondosWarning - Fondos con advertencias
+   * @param {Number} stats.fondosOmitidos - Fondos omitidos
+   * @param {Number} stats.duracionTotal - Duración total en ms
    * @returns {Promise<void>}
    */
   async updateExecutionState(idEjecucion, estado, stats = {}) {
@@ -358,6 +363,12 @@ class ExecutionTracker {
       }
       if (stats.fondosError !== undefined) {
         request.input('FondosError', sql.Int, stats.fondosError);
+      }
+      if (stats.fondosWarning !== undefined) {
+        request.input('FondosWarning', sql.Int, stats.fondosWarning);
+      }
+      if (stats.fondosOmitidos !== undefined) {
+        request.input('FondosOmitidos', sql.Int, stats.fondosOmitidos);
       }
       if (stats.duracionTotal !== undefined) {
         request.input('DuracionTotal', sql.Int, stats.duracionTotal);
@@ -375,10 +386,16 @@ class ExecutionTracker {
       if (stats.fondosError !== undefined) {
         query += ', FondosFallidos = @FondosError';
       }
+      if (stats.fondosWarning !== undefined) {
+        query += ', FondosWarning = @FondosWarning';
+      }
+      if (stats.fondosOmitidos !== undefined) {
+        query += ', FondosOmitidos = @FondosOmitidos';
+      }
       if (stats.duracionTotal !== undefined) {
         query += ', Duracion_Total_Ms = @DuracionTotal';
       }
-      if (estado === 'COMPLETADO' || estado === 'ERROR') {
+      if (estado === 'COMPLETADO' || estado === 'ERROR' || estado === 'PARCIAL') {
         query += ', FechaFin = GETDATE()';
       }
 
@@ -387,7 +404,9 @@ class ExecutionTracker {
       await request.query(query);
 
       console.log(
-        `[ExecutionTracker] Estado de ejecución actualizado - ID: ${idEjecucion}, Estado: ${estado}`
+        `[ExecutionTracker] Estado de ejecución actualizado - ID: ${idEjecucion}, Estado: ${estado}, ` +
+        `OK: ${stats.fondosOK || 0}, Error: ${stats.fondosError || 0}, ` +
+        `Warning: ${stats.fondosWarning || 0}, Omitidos: ${stats.fondosOmitidos || 0}`
       );
     } catch (error) {
       console.error(
@@ -396,6 +415,13 @@ class ExecutionTracker {
       );
       throw error;
     }
+  }
+
+  /**
+   * Alias en español para updateExecutionState
+   */
+  async actualizarEstadoEjecucion(idEjecucion, estado, stats = {}) {
+    return await this.updateExecutionState(idEjecucion, estado, stats);
   }
 
   /**

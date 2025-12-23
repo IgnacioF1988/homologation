@@ -100,6 +100,7 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
         stopPolling();
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idEjecucion, onUpdate, onComplete, onError, maxErrors]);
 
   /**
@@ -142,15 +143,26 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
    * resetPolling - Resetea el polling (útil para reintentar después de errores)
    */
   const resetPolling = useCallback(() => {
-    stopPolling();
+    // Detener polling actual
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+      setIsPolling(false);
+    }
+
+    // Reset error state
     consecutiveErrorsRef.current = 0;
     setErrorCount(0);
     setLastError(null);
 
+    // Reiniciar si enabled
     if (enabled && idEjecucion) {
-      startPolling();
+      // Recrear polling
+      setIsPolling(true);
+      poll();
+      intervalRef.current = setInterval(poll, interval);
     }
-  }, [enabled, idEjecucion, startPolling, stopPolling]);
+  }, [enabled, idEjecucion, poll, interval]);
 
   // Effect: Auto-start cuando enabled y idEjecucion están disponibles
   useEffect(() => {
@@ -164,7 +176,8 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
     return () => {
       stopPolling();
     };
-  }, [enabled, idEjecucion, startPolling, stopPolling]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, idEjecucion]);
 
   // Effect: Cleanup al desmontar el componente
   useEffect(() => {

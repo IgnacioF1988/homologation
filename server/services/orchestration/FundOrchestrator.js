@@ -106,7 +106,8 @@ class FundOrchestrator {
         return;
       }
 
-      const execType = serviceConfig.executionType || 'parallel';
+      // Leer 'type' del config (usado en pipeline.config.yaml)
+      const execType = serviceConfig.type || serviceConfig.executionType || 'parallel';
 
       // Si cambia el tipo de ejecución, crear nueva fase
       if (!currentPhase || currentPhase.type !== execType) {
@@ -135,6 +136,7 @@ class FundOrchestrator {
    */
   _instantiateServices() {
     // Importar servicios dinámicamente
+    const ExtractionService = require('../pipeline/ExtractionService');
     const IPAService = require('../pipeline/IPAService');
     const CAPMService = require('../pipeline/CAPMService');
     const DerivadosService = require('../pipeline/DerivadosService');
@@ -144,12 +146,13 @@ class FundOrchestrator {
     // Mapear service IDs del config a clases Node.js
     // Los IDs del config son como "PROCESS_IPA", pero las clases son IPAService
     const serviceClasses = {
+      'EXTRACCION': ExtractionService,
       'PROCESS_IPA': IPAService,
       'PROCESS_CAPM': CAPMService,
       'PROCESS_DERIVADOS': DerivadosService,
       'PROCESS_PNL': PNLService,
       'PROCESS_UBS': UBSService,
-      // EXTRACCION, VALIDACION, CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
+      // VALIDACION, CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
     };
 
     // Instanciar cada servicio con su config
@@ -192,11 +195,21 @@ class FundOrchestrator {
         }
       }
 
+      // Actualizar stats finales
+      await this._updateExecutionStats('COMPLETADO');
       console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecución completada exitosamente`);
       return { success: true, idEjecucion: this.idEjecucion };
 
     } catch (error) {
       console.error(`[FundOrchestrator ${this.idEjecucion}] Error en ejecución:`, error);
+
+      // Actualizar stats finales con error
+      try {
+        await this._updateExecutionStats('ERROR');
+      } catch (statsError) {
+        console.error(`[FundOrchestrator ${this.idEjecucion}] Error actualizando stats:`, statsError);
+      }
+
       throw error;
     }
   }
@@ -231,20 +244,19 @@ class FundOrchestrator {
   /**
    * Ejecutar fase PARALLEL
    * - Se ejecuta por cada fondo en paralelo
-   * - Concurrencia adaptativa:
-   *   - Si fondos > 100: batches de 100
-   *   - Si fondos <= 100: full parallel
-   * - Ejemplo: Process_IPA, Process_CAPM, Process_Derivados
+   * - Concurrencia adaptativa: Max 3 fondos en paralelo
+   * - RCSI habilitado: Elimina bloqueos de lectura usando versionado de filas
    *
    * @param {Object} phase - Fase con servicios parallel
    * @private
    */
   async _executeParallelPhase(phase) {
-    // Concurrencia adaptativa
-    const concurrencyLimit = this.fondos.length > 100 ? 100 : this.fondos.length;
+    // Concurrencia reducida para evitar sobrecarga
+    // RCSI (Read Committed Snapshot Isolation) habilitado en BD elimina bloqueos de lectura
+    const concurrencyLimit = Math.min(this.fondos.length, 3);
     const limit = pLimit(concurrencyLimit);
 
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Concurrencia: ${concurrencyLimit} fondos en paralelo`);
+    console.log(`[FundOrchestrator ${this.idEjecucion}] Concurrencia: ${concurrencyLimit} fondos en paralelo (RCSI habilitado)`);
 
     const promises = this.fondos.map(fund =>
       limit(() => this._executeFundServices(fund, phase.services))
@@ -264,35 +276,40 @@ class FundOrchestrator {
    * @private
    */
   async _executeFundServices(fund, serviceIds) {
-    for (const serviceId of serviceIds) {
-      const service = this.serviceInstances.get(serviceId);
-      if (!service) {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio no encontrado: ${serviceId} (Fondo ${fund.ID_Fund})`);
-        continue;
-      }
-
-      // Verificar condicional (ej: Flag_UBS, Flag_Derivados)
-      if (service.config.conditional && !this._shouldExecute(fund, service.config.conditional)) {
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio omitido (condicional): ${service.name} (Fondo ${fund.ID_Fund})`);
-        continue; // Skip este servicio para este fondo
-      }
-
-      const context = {
-        idEjecucion: this.idEjecucion,
-        fechaReporte: this.fechaReporte,
-        fund
-      };
-
-      try {
-        const result = await service.execute(context);
-
-        if (!result.success) {
-          // Manejar error según política
-          await this._handleServiceError(service, fund, result.error);
+    try {
+      for (const serviceId of serviceIds) {
+        const service = this.serviceInstances.get(serviceId);
+        if (!service) {
+          console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio no encontrado: ${serviceId} (Fondo ${fund.ID_Fund})`);
+          continue;
         }
-      } catch (error) {
-        await this._handleServiceError(service, fund, error);
+
+        // Verificar condicional (ej: Flag_UBS, Flag_Derivados)
+        if (service.config.conditional && !this._shouldExecute(fund, service.config.conditional)) {
+          console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio omitido (condicional): ${service.name} (Fondo ${fund.ID_Fund})`);
+          continue; // Skip este servicio para este fondo
+        }
+
+        const context = {
+          idEjecucion: this.idEjecucion,
+          fechaReporte: this.fechaReporte,
+          fund
+        };
+
+        try {
+          const result = await service.execute(context);
+
+          if (!result.success) {
+            // Manejar error según política
+            await this._handleServiceError(service, fund, result.error);
+          }
+        } catch (error) {
+          await this._handleServiceError(service, fund, error);
+        }
       }
+    } finally {
+      // Actualizar stats después de procesar cada fondo (tiempo real)
+      await this._updateExecutionStats();
     }
   }
 
@@ -354,7 +371,10 @@ class FundOrchestrator {
    * @private
    */
   async _handleServiceError(service, fund, error) {
-    const policy = service.config.errorPolicy || 'STOP_ALL';
+    // Mapear onError del config a política interna
+    // onError puede ser: STOP_ALL, STOP_FUND, CONTINUE, LOG_WARNING
+    const onError = service.config.onError || 'STOP_ALL';
+    const policy = onError === 'LOG_WARNING' ? 'CONTINUE' : onError;
 
     console.error(
       `[FundOrchestrator ${this.idEjecucion}] Error en servicio ${service.name} (Fondo ${fund.ID_Fund}):`,
@@ -375,7 +395,7 @@ class FundOrchestrator {
       throw error;
     } else if (policy === 'STOP_FUND') {
       // Marcar fondo como error, continuar con otros fondos
-      await this.tracker.updateFundErrorStep(
+      await this.tracker.markFundFailed(
         this.idEjecucion,
         fund.ID_Fund,
         service.name,
@@ -384,13 +404,74 @@ class FundOrchestrator {
       // No lanzar error - permite continuar con otros fondos
       return;
     } else if (policy === 'CONTINUE') {
-      // Log y continuar (ya se logueó arriba)
-      await this.tracker.updateFondoState(
-        this.idEjecucion,
-        fund.ID_Fund,
-        service.name,
-        'WARNING'
+      // Log y continuar (ya se logueó arriba con logger.error)
+      // CONTINUE policy: simplemente continuar sin marcar fondo como ERROR
+      // El error ya fue logueado en logs.Ejecucion_Logs para auditoría
+      console.log(
+        `[FundOrchestrator ${this.idEjecucion}] Política CONTINUE: ` +
+        `continuando ejecución para fondo ${fund.ID_Fund} después de error en ${service.name}`
       );
+      // No lanzar error - continuar con siguiente servicio
+      return;
+    }
+  }
+
+  /**
+   * Actualizar estadísticas de ejecución en tiempo real
+   * - Consulta logs.Ejecucion_Fondos para obtener contadores actuales
+   * - Actualiza logs.Ejecuciones con FondosExitosos, FondosFallidos, etc.
+   * - Se llama después de procesar cada fondo y al finalizar
+   *
+   * @param {String} estadoFinal - Estado final de la ejecución (opcional)
+   * @private
+   */
+  async _updateExecutionStats(estadoFinal = null) {
+    try {
+      // Obtener estados actuales de todos los fondos
+      const fondosStates = await this.tracker.getFundStates(this.idEjecucion);
+
+      // Calcular contadores
+      const stats = {
+        fondosOK: fondosStates.filter(f => f.Estado_Final === 'COMPLETADO').length,
+        fondosError: fondosStates.filter(f => f.Estado_Final === 'ERROR').length,
+        fondosWarning: fondosStates.filter(f => f.Estado_Final === 'WARNING').length,
+        fondosOmitidos: fondosStates.filter(f => f.Estado_Final === 'OMITIDO').length,
+      };
+
+      // Determinar estado de la ejecución
+      let estado = estadoFinal || 'EN_PROGRESO';
+
+      // Si no se especificó estado final, calcularlo
+      if (!estadoFinal) {
+        const totalProcesados = stats.fondosOK + stats.fondosError + stats.fondosWarning + stats.fondosOmitidos;
+        const totalFondos = this.fondos.length;
+
+        // Si todos procesados, determinar estado final
+        if (totalProcesados === totalFondos) {
+          if (stats.fondosError > 0) {
+            estado = stats.fondosOK > 0 ? 'PARCIAL' : 'ERROR';
+          } else if (stats.fondosWarning > 0) {
+            estado = 'COMPLETADO'; // Con warnings pero completado
+          } else {
+            estado = 'COMPLETADO';
+          }
+        }
+      }
+
+      // Actualizar tabla logs.Ejecuciones
+      await this.tracker.actualizarEstadoEjecucion(this.idEjecucion, estado, stats);
+
+      console.log(
+        `[FundOrchestrator ${this.idEjecucion}] Stats actualizados - ` +
+        `OK: ${stats.fondosOK}, Error: ${stats.fondosError}, Warning: ${stats.fondosWarning}, Omitidos: ${stats.fondosOmitidos}`
+      );
+
+    } catch (error) {
+      console.error(
+        `[FundOrchestrator ${this.idEjecucion}] Error actualizando stats:`,
+        error
+      );
+      // No lanzar error - esto es un update auxiliar
     }
   }
 }

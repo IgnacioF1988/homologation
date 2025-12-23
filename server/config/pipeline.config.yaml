@@ -290,6 +290,7 @@ services:
           - ID_Ejecucion
           - FechaReporte
           - ID_Fund
+          - Portfolio_PNL
         tracking:
           subStateField: Estado_PNL_01_Dimensiones
       - name: staging.PNL_02_Ajuste_v2
@@ -300,6 +301,7 @@ services:
           - ID_Ejecucion
           - FechaReporte
           - ID_Fund
+          - Portfolio_PNL
         tracking:
           subStateField: Estado_PNL_02_Ajuste
       - name: staging.PNL_03_Agrupacion_v2
@@ -310,6 +312,7 @@ services:
           - ID_Ejecucion
           - FechaReporte
           - ID_Fund
+          - Portfolio_PNL
         tracking:
           subStateField: Estado_PNL_03_Agrupacion
       - name: staging.PNL_04_CrearRegistrosAjusteIPA_v2
@@ -320,6 +323,7 @@ services:
           - ID_Ejecucion
           - FechaReporte
           - ID_Fund
+          - Portfolio_PNL
         tracking:
           subStateField: Estado_PNL_04_AjusteIPA
       - name: staging.PNL_05_Consolidar_IPA_PNL_v2
@@ -330,6 +334,7 @@ services:
           - ID_Ejecucion
           - FechaReporte
           - ID_Fund
+          - Portfolio_PNL
         tracking:
           subStateField: Estado_PNL_05_Consolidar
     onError: STOP_FUND

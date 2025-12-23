@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getPool, sql } = require('../config/database');
+const { getPoolHomologacion, sql } = require('../config/database');
+
+// Alias para compatibilidad con código existente
+const getPool = getPoolHomologacion;
 
 // GET /api/cola-pendientes - Pendientes con paginación
 // Query params: estado, resetEnProceso, page (default 1), limit (default 100, max 500)

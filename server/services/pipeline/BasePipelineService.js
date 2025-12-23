@@ -88,8 +88,30 @@ class BasePipelineService {
         await this.executeSP(spConfig, context, transaction);
       }
 
-      // 5. Commit de la transacción
-      await transaction.commit();
+      // 5. Validar estado de transacción antes de commit
+      // XACT_STATE() retorna:
+      //   1  = Transacción activa y committable (proceder con commit)
+      //   0  = No hay transacción activa
+      //  -1  = Transacción uncommittable (DEBE hacer rollback, commit fallará)
+      const xactStateResult = await transaction.request()
+        .query('SELECT XACT_STATE() as XactState');
+
+      const xactState = xactStateResult.recordset[0].XactState;
+
+      if (xactState === -1) {
+        // Transacción uncommittable - forzar rollback
+        await this.logError(idEjecucion, fund.ID_Fund,
+          `Transacción uncommittable detectada (XACT_STATE = -1). Ejecutando rollback...`);
+        await transaction.rollback();
+        throw new Error('Uncommittable transaction detected - transaction rolled back');
+      } else if (xactState === 1) {
+        // Transacción activa y committable - proceder con commit
+        await transaction.commit();
+      } else if (xactState === 0) {
+        // No hay transacción activa
+        await this.logWarning(idEjecucion, fund.ID_Fund,
+          'No hay transacción activa al intentar commit');
+      }
 
       // 6. Actualizar estado exitoso
       const duration = Date.now() - startTime;
@@ -161,6 +183,9 @@ class BasePipelineService {
           request.input('Portfolio_Derivados', sql.NVarChar(50), fund.Portfolio_Derivados);
         } else if (field === 'Portfolio_UBS') {
           request.input('Portfolio_UBS', sql.NVarChar(50), fund.Portfolio_UBS);
+        } else if (field === 'Portfolio_PNL') {
+          // PNL usa Portfolio_Geneva (no hay campo Portfolio_PNL en BD)
+          request.input('Portfolio_PNL', sql.NVarChar(50), fund.Portfolio_Geneva);
         } else if (fund[field] !== undefined) {
           // Campo dinámico del fondo
           request.input(field, sql.NVarChar, fund[field]);

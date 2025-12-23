@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getPool } = require('../config/database');
+const { getPoolHomologacion } = require('../config/database');
+
+// Alias para compatibilidad con código existente
+const getPool = getPoolHomologacion;
 
 // Mapeo de nombres de catálogos a tablas SQL (esquema cat)
 const catalogoTableMap = {

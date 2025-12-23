@@ -49,11 +49,10 @@ const PipelineExecutionContainer = () => {
           fondos: [], // Se cargarán en el primer poll
         };
 
-        // Actualizar estado
+        // Actualizar estado (esto causará que el hook de polling auto-inicie)
         executionState.updateFromPolling(initialState);
-
-        // Iniciar polling
-        pollingHook.startPolling();
+        // NOTA: No llamar pollingHook.startPolling() manualmente.
+        // El useEffect del hook detectará el nuevo ID_Ejecucion y auto-iniciará.
       }
     },
     onExecuteError: (error) => {

@@ -1,0 +1,147 @@
+### Page state
+- Page URL: http://10.56.30.112:3000/
+- Page Title: Homologacion de Instrumentos
+- Page Snapshot:
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e8]:
+    - img [ref=e10]
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - heading "Homologación de Instrumentos" [level=4] [ref=e119]
+        - generic [ref=e16]: v2.0
+      - paragraph [ref=e17]: Sistema de gestión y clasificación de instrumentos financieros
+  - generic [ref=e18]:
+    - tablist [ref=e22]:
+      - tab "Cola de Pendientes" [ref=e120] [cursor=pointer]:
+        - img [ref=e24]
+        - text: Cola de Pendientes
+      - tab "Nuevo Instrumento" [ref=e121] [cursor=pointer]:
+        - img [ref=e27]
+        - text: Nuevo Instrumento
+      - tab "Pipeline ETL" [selected] [ref=e122] [cursor=pointer]:
+        - img [ref=e30]
+        - text: Pipeline ETL
+    - generic [ref=e55]:
+      - generic [ref=e56]:
+        - generic [ref=e57]:
+          - generic [ref=e58]:
+            - heading "Pipeline ETL" [level=4] [ref=e123]
+            - generic [ref=e124]:
+              - img [ref=e125]
+              - generic [ref=e127]: LIVE
+          - generic [ref=e128]:
+            - generic [ref=e130]: "#1766174087331"
+            - paragraph [ref=e131]:
+              - text: "Fecha:"
+              - strong [ref=e132]: 2025-10-24
+            - paragraph [ref=e133]:
+              - text: "Iniciado:"
+              - strong [ref=e134]: 22-12-2025, 07:43:29 p. m.
+        - generic "No se puede ejecutar en este momento" [ref=e135]:
+          - button "Nueva Ejecución" [disabled]:
+            - generic:
+              - img
+            - text: Nueva Ejecución
+      - generic [ref=e136]:
+        - heading "Pipeline de Procesamiento" [level=6] [ref=e137]
+        - generic [ref=e138]:
+          - generic [ref=e139]:
+            - img [ref=e141]
+            - generic [ref=e143]: Extracción
+          - generic [ref=e145]:
+            - img [ref=e147]
+            - generic [ref=e149]: Validación
+          - generic [ref=e151]:
+            - img [ref=e153]
+            - generic [ref=e155]: IPA
+          - generic [ref=e157]:
+            - img [ref=e159]
+            - generic [ref=e161]: CAPM
+          - generic [ref=e163]:
+            - img [ref=e165]
+            - generic [ref=e167]: Derivados
+          - generic [ref=e169]:
+            - img [ref=e171]
+            - generic [ref=e173]: PNL
+          - generic [ref=e175]:
+            - img [ref=e177]
+            - generic [ref=e179]: UBS
+          - generic [ref=e181]:
+            - img [ref=e183]
+            - generic [ref=e185]: Cubo
+        - generic [ref=e186]:
+          - generic [ref=e189]: Completado
+          - generic [ref=e192]: En Progreso
+          - generic [ref=e195]: Error
+          - generic [ref=e198]: Advertencia
+          - generic [ref=e201]: Pendiente
+      - generic [ref=e202]:
+        - heading "Resumen de Ejecución" [level=6] [ref=e203]
+        - generic [ref=e204]:
+          - generic [ref=e205]:
+            - paragraph [ref=e206]: Progreso General
+            - paragraph [ref=e207]: NaN%
+          - progressbar [ref=e208]
+        - generic [ref=e210]:
+          - generic [ref=e212]:
+            - img [ref=e213]
+            - generic [ref=e215]:
+              - generic [ref=e216]: Total Fondos
+              - heading "0" [level=5] [ref=e217]
+          - generic [ref=e219]:
+            - img [ref=e220]
+            - generic [ref=e222]:
+              - generic [ref=e223]: Exitosos
+              - heading "0" [level=5] [ref=e224]
+          - generic [ref=e226]:
+            - img [ref=e227]
+            - generic [ref=e229]:
+              - generic [ref=e230]: Errores
+              - heading "0" [level=5] [ref=e231]
+          - generic [ref=e233]:
+            - img [ref=e234]
+            - generic [ref=e236]:
+              - generic [ref=e237]: Advertencias
+              - heading "0" [level=5] [ref=e238]
+        - generic [ref=e239]:
+          - generic [ref=e240]:
+            - generic [ref=e241]: Completados
+            - heading "0 / 0" [level=6] [ref=e242]
+          - generic [ref=e243]:
+            - generic [ref=e244]: Tiempo Transcurrido
+            - heading "0s" [level=6] [ref=e245]
+      - generic [ref=e246]:
+        - generic [ref=e248]:
+          - img [ref=e250]
+          - textbox "Buscar por nombre o código de fondo..." [ref=e252]
+          - group
+        - generic [ref=e253]:
+          - generic [ref=e254]: "Filtrar por estado:"
+          - generic [ref=e255]:
+            - button "Todos 0" [ref=e256] [cursor=pointer]:
+              - generic [ref=e258]:
+                - paragraph [ref=e259]: Todos
+                - generic [ref=e260]: "0"
+            - button "Errores 0" [ref=e261] [cursor=pointer]:
+              - generic [ref=e263]:
+                - paragraph [ref=e264]: Errores
+                - generic [ref=e265]: "0"
+            - button "Advertencias 0" [ref=e266] [cursor=pointer]:
+              - generic [ref=e268]:
+                - paragraph [ref=e269]: Advertencias
+                - generic [ref=e270]: "0"
+            - button "Exitosos 0" [ref=e271] [cursor=pointer]:
+              - generic [ref=e273]:
+                - paragraph [ref=e274]: Exitosos
+                - generic [ref=e275]: "0"
+            - button "En Progreso 0" [ref=e276] [cursor=pointer]:
+              - generic [ref=e278]:
+                - paragraph [ref=e279]: En Progreso
+                - generic [ref=e280]: "0"
+      - paragraph [ref=e282]: Cargando fondos...
+  - button "Mission Control - Pendientes ETL" [ref=e318] [cursor=pointer]:
+    - generic [ref=e74]:
+      - img [ref=e75]
+      - generic [ref=e77]: 99+
+```

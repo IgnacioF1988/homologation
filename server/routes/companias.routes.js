@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getPool, sql } = require('../config/database');
+const { getPoolHomologacion, sql } = require('../config/database');
+
+// Alias para compatibilidad con código existente
+const getPool = getPoolHomologacion;
 
 // GET /api/companias - Todas las compañías
 router.get('/', async (req, res) => {

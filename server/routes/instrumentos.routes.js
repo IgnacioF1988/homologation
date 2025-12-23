@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { getPool, sql } = require('../config/database');
+const { getPoolHomologacion, sql } = require('../config/database');
+
+// Alias para compatibilidad con código existente
+const getPool = getPoolHomologacion;
 
 // Mapeo de campos frontend → columnas BD
 // El frontend usa los mismos nombres que la BD, pero algunos campos legacy pueden venir diferentes
