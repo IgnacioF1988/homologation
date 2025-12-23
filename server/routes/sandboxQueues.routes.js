@@ -818,21 +818,32 @@ router.post('/:queueType/resolve', async (req, res) => {
         break;
 
       case 'suciedades':
-        // Insertar en tabla de stock de suciedades (MonedaHomologacion.stock.Suciedades)
-        // Solo si el estado es 'Suciedad' (confirmado)
-        if (asignacion.estado === 'Suciedad') {
+        // Insertar en tabla de stock de suciedades (Inteligencia_Producto_Dev.stock.Suciedades)
+        // Solo si el estado es 'Suciedad' (confirmado) Y tiene clasificación CXC/CXP
+        if (asignacion.estado === 'Suciedad' && asignacion.clasificacion) {
           insertQuery = `
             IF NOT EXISTS (
-              SELECT 1 FROM stock.Suciedades
-              WHERE investId = @investId AND portfolio = @portfolio AND qty = @qty
+              SELECT 1 FROM Inteligencia_Producto_Dev.stock.Suciedades
+              WHERE investId = @investId AND portfolio = @portfolio
             )
-            INSERT INTO stock.Suciedades (investId, portfolio, qty, estado)
-            VALUES (@investId, @portfolio, @qty, @estado)
+            INSERT INTO Inteligencia_Producto_Dev.stock.Suciedades
+            (investId, portfolio, qty, estado, clasificacion, observaciones)
+            VALUES (@investId, @portfolio, @qty, @estado, @clasificacion, @observaciones)
+            ELSE
+            -- Si ya existe, actualizar clasificación (por si cambió)
+            UPDATE Inteligencia_Producto_Dev.stock.Suciedades
+            SET clasificacion = @clasificacion,
+                qty = @qty,
+                fechaConfirmacion = GETDATE(),
+                observaciones = @observaciones
+            WHERE investId = @investId AND portfolio = @portfolio
           `;
           insertRequest.input('investId', sql.NVarChar, asignacion.investId);
           insertRequest.input('portfolio', sql.NVarChar, asignacion.portfolio);
           insertRequest.input('qty', sql.Float, asignacion.qty);
           insertRequest.input('estado', sql.NVarChar, 'Suciedad');
+          insertRequest.input('clasificacion', sql.NVarChar, asignacion.clasificacion); // 'CXC' o 'CXP'
+          insertRequest.input('observaciones', sql.NVarChar, asignacion.observaciones || null);
         }
         break;
 
@@ -855,12 +866,12 @@ router.post('/:queueType/resolve', async (req, res) => {
           .input('idAlertaOrigen', sql.Int, parseInt(id))
           .input('datosOrigen', sql.NVarChar, item.datosOrigen || null)
           .query(`
-            INSERT INTO stock.descuadresHistorial
-            (tipoDescuadre, portfolio, valorA, valorB, diferencia, fechaReporte,
-             accion, observaciones, usuarioProceso, idAlertaOrigen, datosOrigen)
+            INSERT INTO Inteligencia_Producto_Dev.stock.descuadresHistorial
+            (tipoDescuadre, portfolio, montoA, montoB, diferencia, fechaReporte,
+             estado, observaciones, usuarioAprobacion)
             VALUES
             (@tipoDescuadre, @portfolio, @valorA, @valorB, @diferencia, @fechaReporte,
-             @accion, @observaciones, @usuarioProceso, @idAlertaOrigen, @datosOrigen)
+             @accion, @observaciones, @usuarioProceso)
           `);
 
         // Actualizar cola con estado y acción
