@@ -350,6 +350,7 @@ services:
     type: parallel
     dependencies: [EXTRACCION]       # Solo requiere extracción, NO IPA (independiente)
     maxConcurrent: 999               # Sin límite - máxima paralelización
+    conditional: Flag_UBS            # Solo ejecutar para fondos con Flag_UBS=1
     spList:
       - name: staging.UBS_01_Tratamiento_Fondos_Luxemburgo_v2
         order: 1
