@@ -23,6 +23,26 @@
 
 const sql = require('mssql');
 
+/**
+ * StandByRequiredError - Error especial para stand-by
+ *
+ * Stand-by NO es un error - es un estado válido que requiere aprobación de usuario.
+ * Este error permite distinguir pausas válidas de errores críticos.
+ *
+ * @property {Number} standByCode - Código de stand-by (5, 6, 7, 8)
+ * @property {String} spName - Nombre del SP que activó el stand-by
+ * @property {Boolean} pausable - Siempre true (indica que puede resumir)
+ */
+class StandByRequiredError extends Error {
+  constructor(message, standByCode, spName) {
+    super(message);
+    this.name = 'StandByRequiredError';
+    this.standByCode = standByCode;
+    this.spName = spName;
+    this.pausable = true;
+  }
+}
+
 class BasePipelineService {
   /**
    * Constructor
@@ -102,6 +122,15 @@ class BasePipelineService {
         // Transacción uncommittable - forzar rollback
         await this.logError(idEjecucion, fund.ID_Fund,
           `Transacción uncommittable detectada (XACT_STATE = -1). Ejecutando rollback...`);
+
+        // NUEVO: Registrar en Fondos_Problema
+        await this.registerFundProblem(
+          idEjecucion,
+          fund.ID_Fund,
+          this.id,
+          'Uncommittable transaction detected (XACT_STATE=-1) - possible constraint violation or trigger error'
+        );
+
         await transaction.rollback();
         throw new Error('Uncommittable transaction detected - transaction rolled back');
       } else if (xactState === 1) {
@@ -149,6 +178,40 @@ class BasePipelineService {
   async executeSP(spConfig, context, transaction) {
     const { idEjecucion, fechaReporte, fund } = context;
     const spName = spConfig.name;
+
+    // ============================================
+    // VALIDACIÓN DEFENSIVA (NUEVO - 2025-12-23)
+    // ============================================
+    // Validar que ID_Ejecucion e ID_Fund sean valores válidos (> 0)
+    // CRÍTICO: Previene race conditions y deadlocks en ejecuciones paralelas
+    // Si estos valores son 0, múltiples ejecuciones podrían intentar DELETE
+    // de los mismos 1.37M registros históricos causando lock escalation
+    if (!idEjecucion || idEjecucion <= 0) {
+      const error = new Error(
+        `ID_Ejecucion inválido (${idEjecucion}). Debe ser > 0 para garantizar aislamiento en ejecuciones paralelas.`
+      );
+      await this.logError(
+        idEjecucion || 0,
+        fund.ID_Fund || 0,
+        `CRITICAL: ${error.message} - SP: ${spName}`
+      );
+      throw error;
+    }
+
+    if (!fund.ID_Fund || fund.ID_Fund <= 0) {
+      const error = new Error(
+        `ID_Fund inválido (${fund.ID_Fund}). Debe ser > 0 para garantizar aislamiento en ejecuciones paralelas.`
+      );
+      await this.logError(
+        idEjecucion,
+        fund.ID_Fund || 0,
+        `CRITICAL: ${error.message} - SP: ${spName}, Fund: ${fund.FundShortName || 'UNKNOWN'}`
+      );
+      throw error;
+    }
+    // ============================================
+    // FIN VALIDACIÓN DEFENSIVA
+    // ============================================
 
     // Log inicio
     await this.logDebug(idEjecucion, fund.ID_Fund, `Ejecutando ${spName}...`);
@@ -202,6 +265,48 @@ class BasePipelineService {
       return await request.execute(spName);
     }, spConfig);
 
+    // *** CRITICAL: Validar estado de transacción inmediatamente después de cada SP ***
+    // Esto identifica qué SP específico causa uncommittable transactions en concurrencia
+    const postXactState = await transaction.request()
+      .query('SELECT XACT_STATE() as XactState');
+
+    const xactState = postXactState.recordset[0].XactState;
+
+    if (xactState === -1) {
+      // Transacción uncommittable detectada - este SP la causó
+      await this.logError(
+        idEjecucion,
+        fund.ID_Fund,
+        `CRITICAL: ${spName} caused transaction to become uncommittable (XACT_STATE=-1). ` +
+        `This SP likely has constraint violations, trigger errors, or severity 16+ exceptions. ` +
+        `Fund: ${fund.Nombre_Fondo || fund.ID_Fund}`
+      );
+
+      // NUEVO: Registrar en Fondos_Problema
+      await this.registerFundProblem(
+        idEjecucion,
+        fund.ID_Fund,
+        spName,
+        `Uncommittable transaction (XACT_STATE=-1) - SP caused constraint violation or trigger error`
+      );
+
+      // Rollback inmediato
+      await transaction.rollback();
+
+      throw new Error(
+        `${spName} caused uncommittable transaction (XACT_STATE=-1). ` +
+        `Check for constraint violations, trigger errors, or severe exceptions in SP code.`
+      );
+    } else if (xactState === 0) {
+      // Transacción no activa - unexpected pero no crítico
+      await this.logWarning(
+        idEjecucion,
+        fund.ID_Fund,
+        `${spName} completed but transaction is no longer active (XACT_STATE=0)`
+      );
+    }
+    // xactState === 1 (committable) es el estado esperado - continuar normalmente
+
     // Procesar resultado
     const returnValue = result.returnValue;
     const rowsProcessed = result.output.RowsProcessed || 0;
@@ -214,18 +319,57 @@ class BasePipelineService {
       `${spName} completado - ReturnValue: ${returnValue}, Filas: ${rowsProcessed}, Errores: ${errorCount}`
     );
 
+    // ============================================
     // Validar resultado según returnValue
-    // 0 = éxito, 1 = warning, 2 = retry, 3 = crítico
+    // ============================================
+    // Códigos redefinidos (Migration 002):
+    //   0 = Éxito / Skip válido
+    //   2 = Retry (deadlock/timeout) - manejado en executeWithRetry
+    //   3 = Error crítico (detiene fondo, registra en Fondos_Problema)
+    //   5 = Stand-by SUCIEDADES (pausa antes CAPM)
+    //   6 = Stand-by HOMOLOGACION (pausa inmediato)
+    //   7 = Stand-by DESCUADRES-CAPM (pausa antes PNL)
+    //   8 = Stand-by DESCUADRES-GENERAL (pausa post-proceso)
+
+    // *** NUEVO: Manejo de códigos stand-by (5-8) ***
+    if (returnValue >= 5 && returnValue <= 8) {
+      await this._handleStandByCode(returnValue, spName, context);
+
+      // Lanzar excepción especial (NO es error, es pausa válida)
+      const error = new StandByRequiredError(
+        `Stand-by requerido por ${spName}`,
+        returnValue,
+        spName
+      );
+      throw error;
+    }
+
+    // Manejo de error crítico (código 3)
     if (returnValue === 3) {
+      // Registrar en Fondos_Problema (si el SP no lo hizo ya)
+      await this.registerFundProblem(
+        idEjecucion,
+        fund.ID_Fund,
+        this.id,
+        `Error crítico en ${spName}`
+      );
+
       throw new Error(`${spName} falló críticamente (returnValue: 3)`);
     }
 
+    // Manejo de retry (código 2)
     if (returnValue === 2) {
-      throw new Error(`${spName} error recuperable (returnValue: 2)`);
+      throw new Error(`${spName} requiere retry (deadlock/timeout)`);
     }
 
+    // *** DEPRECATED: Código 1 (warning general) eliminado ***
+    // Si un SP retorna código 1, loguear pero NO es esperado
     if (returnValue === 1) {
-      await this.logWarning(idEjecucion, fund.ID_Fund, `${spName} completó con warnings`);
+      await this.logWarning(idEjecucion, fund.ID_Fund,
+        `[DEPRECATED] ${spName} retornó código 1 (warning). ` +
+        `Este código fue eliminado en Migration 002. ` +
+        `El SP debe retornar 0 (éxito), 3 (error), o 5-8 (stand-by).`
+      );
     }
 
     // Validaciones adicionales
@@ -258,6 +402,24 @@ class BasePipelineService {
         return await fn();
       } catch (error) {
         lastError = error;
+
+        // *** ENHANCED: Capturar detalles completos del error SQL Server ***
+        const errorDetails = {
+          number: error.number || 'N/A',
+          severity: error.class || 'N/A',
+          state: error.state || 'N/A',
+          message: error.message || 'N/A',
+          procName: error.procName || 'N/A',
+          lineNumber: error.lineNumber || 'N/A',
+          code: error.code || 'N/A'
+        };
+
+        console.error(
+          `[${this.id}] SQL Server Error Details: ` +
+          `Number=${errorDetails.number}, Severity=${errorDetails.severity}, State=${errorDetails.state}, ` +
+          `Proc=${errorDetails.procName}, Line=${errorDetails.lineNumber}, Code=${errorDetails.code}, ` +
+          `Message="${errorDetails.message}"`
+        );
 
         // Verificar si es error retriable
         const isDeadlock = error.number === 1205; // SQL deadlock
@@ -368,6 +530,115 @@ class BasePipelineService {
     // Si es CONTINUE o LOG_WARNING, no re-lanzar (error manejado)
   }
 
+  /**
+   * Manejar código de stand-by (5-8)
+   *
+   * Registra el tipo de stand-by detectado sin bloquear la ejecución.
+   * El bloqueo lo maneja FundOrchestrator consultando logs.Ejecucion_Fondos.
+   *
+   * @param {Number} returnValue - Código de stand-by (5, 6, 7, 8)
+   * @param {String} spName - Nombre del SP
+   * @param {Object} context - Contexto de ejecución
+   * @private
+   */
+  async _handleStandByCode(returnValue, spName, context) {
+    const { idEjecucion, fund } = context;
+
+    const standByTypes = {
+      5: 'SUCIEDADES',
+      6: 'HOMOLOGACION',
+      7: 'DESCUADRES-CAPM',
+      8: 'DESCUADRES-GENERAL'
+    };
+
+    const tipoStandBy = standByTypes[returnValue] || 'UNKNOWN';
+
+    await this.logger.log(
+      idEjecucion,
+      fund.ID_Fund,
+      'INFO',  // INFO porque stand-by es estado válido (no WARNING, no ERROR)
+      this.id,
+      `⏸️ Stand-by activado por ${spName}: ${tipoStandBy} (código ${returnValue})`
+    );
+  }
+
+  /**
+   * Registrar problema de fondo en sandbox.Fondos_Problema
+   *
+   * Método reutilizable para todos los servicios.
+   * Registra problemas críticos que impiden continuar el procesamiento.
+   *
+   * @param {BigInt} idEjecucion - ID de ejecución
+   * @param {Number} idFund - ID del fondo
+   * @param {String} proceso - Proceso que detectó el problema (ej: 'PROCESS_IPA', 'IPA_02')
+   * @param {String} tipoProblema - Descripción del problema
+   */
+  async registerFundProblem(idEjecucion, idFund, proceso, tipoProblema) {
+    try {
+      // Obtener fechaReporte de la ejecución
+      const ejecResult = await this.pool.request()
+        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+        .query('SELECT FechaReporte FROM logs.Ejecuciones WHERE ID_Ejecucion = @ID_Ejecucion');
+
+      const fechaReporte = ejecResult.recordset[0]?.FechaReporte;
+
+      if (!fechaReporte) {
+        console.warn(`[BasePipelineService] No se pudo obtener FechaReporte para ID_Ejecucion=${idEjecucion}`);
+        return;
+      }
+
+      // Registrar problema (evitar duplicados)
+      await this.pool.request()
+        .input('FechaReporte', sql.NVarChar(10), fechaReporte)
+        .input('ID_Fund', sql.Int, idFund)
+        .input('Proceso', sql.NVarChar(50), proceso)
+        .input('Tipo_Problema', sql.NVarChar(500), tipoProblema)
+        .query(`
+          IF NOT EXISTS (
+            SELECT 1 FROM sandbox.Fondos_Problema
+            WHERE FechaReporte = @FechaReporte
+              AND ID_Fund = @ID_Fund
+              AND Proceso = @Proceso
+              AND Tipo_Problema LIKE '%' + @Tipo_Problema + '%'
+          )
+          BEGIN
+            IF EXISTS (SELECT 1 FROM sandbox.Fondos_Problema
+                       WHERE FechaReporte = @FechaReporte
+                         AND ID_Fund = @ID_Fund
+                         AND Proceso = @Proceso)
+            BEGIN
+              -- Actualizar problema existente (agregar tipo)
+              UPDATE sandbox.Fondos_Problema
+              SET Tipo_Problema = Tipo_Problema + '; ' + @Tipo_Problema,
+                  FechaProceso = CONVERT(NVARCHAR, GETDATE(), 120)
+              WHERE FechaReporte = @FechaReporte
+                AND ID_Fund = @ID_Fund
+                AND Proceso = @Proceso;
+            END
+            ELSE
+            BEGIN
+              -- Insertar nuevo problema
+              INSERT INTO sandbox.Fondos_Problema (FechaReporte, ID_Fund, Proceso, Tipo_Problema, FechaProceso)
+              VALUES (@FechaReporte, @ID_Fund, @Proceso, @Tipo_Problema,
+                      CONVERT(NVARCHAR, GETDATE(), 120));
+            END
+          END
+        `);
+
+      await this.logger.log(
+        idEjecucion,
+        idFund,
+        'ERROR',  // Problemas críticos son ERROR
+        this.id,
+        `Problema registrado en sandbox.Fondos_Problema: ${tipoProblema}`
+      );
+
+    } catch (error) {
+      // No fallar el pipeline si falla el logging
+      console.warn(`[BasePipelineService] Error registrando problema: ${error.message}`);
+    }
+  }
+
   // ============================================
   // Logging helpers
   // ============================================
@@ -393,3 +664,4 @@ class BasePipelineService {
 }
 
 module.exports = BasePipelineService;
+module.exports.StandByRequiredError = StandByRequiredError;
