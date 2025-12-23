@@ -1,13 +1,31 @@
 Hay que asegurarse de que el plan de refactrorizacion multiusuario del formulario herede todo el manejo de transacciones del pipeline
 
-hay que refactrizar todos los extract. Están sólo por fecha en extract service y en los sps
+hay que refactrizar todos los extract. Están sólo por fecha en extract service y en los sps  [OK]
 
 Hay un problema con  MLCC_Geneva. NO lo reconoce el proceso, ver cómo arreglarlo. 
 
 Portfolio	Ticker	FechaCreacion
-MLCC_Geneva	MOCCIIU LX Equity	2025-11-05 12:17:31.100 ----> No lo está tomando el pipeline actual
+MLCC_Geneva	MOCCIIU LX Equity	2025-11-05 12:17:31.100 ----> No lo está tomando el pipeline actual  [OK]
 SMULEF	MONLAEI LX Equity	2025-11-05 12:17:31.100
 MSCLUX	MLLSCIU LX	2025-11-05 12:17:31.100
 
 
 ver porqué no se llenan los if_fund y id_process de las stagging
+
+
+❌ PNL_05 (NOT used in pipeline v2) ---> esto está mal. Parece que sí tenía columnas de MTD_YTD el original que no se traspasaron aqui. Revisa!!  
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+003_UPDATE_IPA_04_StandBy_Suciedades.sql
+
+Se eliminó el quantity del  003_v3_FIX_IPA_04_Remove_Qty_Condition.sql y no debería, sólo debería arreglarse la lógica (porque está causando conflicto). Pero estabilicemos y luego corregimos:
+I've identified the problem! The JOIN condition in IPA_04 requires an exact Qty match, but dimensionales.Suciedades_IPA contains historical quantities that no longer match the current extract data.
+
+  Evidence:
+  - Without the Qty condition: 2 matches found (CARLYLE VIII + CFMBICMDOL)
+  - With the Qty condition: 0 matches
+  - The table has 1340 rows but only 971 distinct Portfolio+InvestID pairs, meaning multiple historical Qty values per instrument
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

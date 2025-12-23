@@ -62,7 +62,11 @@
       "mcp__playwright__browser_console_messages",
       "mcp__playwright__browser_network_requests",
       "mcp__playwright__browser_type",
-      "mcp__playwright__browser_press_key"
+      "mcp__playwright__browser_press_key",
+      "Bash(cut:*)",
+      "Bash(timeout 120 node:*)",
+      "Bash(tee:*)",
+      "Bash(where:*)"
     ],
     "deny": [],
     "ask": []

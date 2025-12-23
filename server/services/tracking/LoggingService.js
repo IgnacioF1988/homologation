@@ -200,7 +200,7 @@ class LoggingService {
           log.categoria,
           log.etapa,
           log.subEtapa,
-          log.mensaje.substring(0, 2000), // Truncar si excede 2000 caracteres
+          log.mensaje ? log.mensaje.substring(0, 2000) : null, // Truncar si excede 2000 caracteres
           log.detalle,
           log.datosJSON,
           log.stackTrace

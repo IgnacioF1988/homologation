@@ -17,6 +17,7 @@
 const yaml = require('js-yaml');
 const fs = require('fs');
 const path = require('path');
+const sql = require('mssql');
 const pLimit = require('p-limit');
 const DependencyResolver = require('./DependencyResolver');
 
@@ -137,6 +138,7 @@ class FundOrchestrator {
   _instantiateServices() {
     // Importar servicios dinámicamente
     const ExtractionService = require('../pipeline/ExtractionService');
+    const ValidationService = require('../pipeline/ValidationService');
     const IPAService = require('../pipeline/IPAService');
     const CAPMService = require('../pipeline/CAPMService');
     const DerivadosService = require('../pipeline/DerivadosService');
@@ -147,12 +149,13 @@ class FundOrchestrator {
     // Los IDs del config son como "PROCESS_IPA", pero las clases son IPAService
     const serviceClasses = {
       'EXTRACCION': ExtractionService,
+      'VALIDACION': ValidationService,
       'PROCESS_IPA': IPAService,
       'PROCESS_CAPM': CAPMService,
       'PROCESS_DERIVADOS': DerivadosService,
       'PROCESS_PNL': PNLService,
       'PROCESS_UBS': UBSService,
-      // VALIDACION, CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
+      // CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
     };
 
     // Instanciar cada servicio con su config
@@ -253,6 +256,7 @@ class FundOrchestrator {
   async _executeParallelPhase(phase) {
     // Concurrencia reducida para evitar sobrecarga
     // RCSI (Read Committed Snapshot Isolation) habilitado en BD elimina bloqueos de lectura
+    // Pool configurado con min=3 connections para evitar cross-contamination
     const concurrencyLimit = Math.min(this.fondos.length, 3);
     const limit = pLimit(concurrencyLimit);
 
@@ -266,7 +270,66 @@ class FundOrchestrator {
   }
 
   /**
+   * Verificar si fondo debe ser excluido por problemas detectados
+   *
+   * Consulta sandbox.Fondos_Problema para determinar si el fondo tiene problemas
+   * críticos que impiden su procesamiento (datos faltantes, validaciones fallidas).
+   *
+   * IMPORTANTE: Fondos excluidos se marcan como OMITIDO y NO se procesan.
+   * Esto previene desperdiciar recursos en fondos que fallarán de todas formas.
+   *
+   * @param {Object} fund - Fondo a evaluar
+   * @param {String} fechaReporte - Fecha a procesar
+   * @returns {Promise<Boolean>} - true si debe ejecutarse, false si debe omitirse
+   * @private
+   */
+  async _shouldExecuteFund(fund, fechaReporte) {
+    try {
+      const result = await this.pool.request()
+        .input('FechaReporte', sql.NVarChar(10), fechaReporte)
+        .input('ID_Fund', sql.Int, fund.ID_Fund)
+        .query(`
+          SELECT Proceso, Tipo_Problema
+          FROM sandbox.Fondos_Problema
+          WHERE FechaReporte = @FechaReporte AND ID_Fund = @ID_Fund
+        `);
+
+      if (result.recordset.length > 0) {
+        // Fondo tiene problemas - OMITIR
+        const problemas = result.recordset.map(r => `${r.Proceso}: ${r.Tipo_Problema}`).join('; ');
+
+        await this.logger.log(
+          this.idEjecucion,
+          fund.ID_Fund,
+          'WARNING',
+          'FundOrchestrator',
+          null,
+          `⚠️ Fondo OMITIDO por problemas detectados en validación: ${problemas}`
+        );
+
+        await this.tracker.updateFundState(
+          this.idEjecucion,
+          fund.ID_Fund,
+          'Estado_Final',
+          'OMITIDO'
+        );
+
+        return false; // NO ejecutar
+      }
+
+      return true; // OK para ejecutar
+    } catch (error) {
+      // En caso de error verificando, permitir ejecución (fail-safe)
+      console.warn(
+        `[FundOrchestrator ${this.idEjecucion}] Error verificando exclusión para fondo ${fund.ID_Fund}: ${error.message}`
+      );
+      return true;
+    }
+  }
+
+  /**
    * Ejecutar servicios para un fondo específico
+   * - Verifica exclusión automática (sandbox.Fondos_Problema)
    * - Verifica condicionales (Flag_UBS, Flag_Derivados)
    * - Ejecuta servicios en orden
    * - Maneja errores según política (STOP_ALL, STOP_FUND, CONTINUE)
@@ -277,6 +340,12 @@ class FundOrchestrator {
    */
   async _executeFundServices(fund, serviceIds) {
     try {
+      // NUEVO: Verificar si fondo debe ser excluido por problemas
+      const shouldExecute = await this._shouldExecuteFund(fund, this.fechaReporte);
+      if (!shouldExecute) {
+        return; // Skip este fondo completamente
+      }
+
       for (const serviceId of serviceIds) {
         const service = this.serviceInstances.get(serviceId);
         if (!service) {
