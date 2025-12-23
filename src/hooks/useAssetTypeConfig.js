@@ -218,7 +218,7 @@ const useAssetTypeConfig = (investmentTypeCode, formData = {}) => {
       })
       .map(alert => ({
         ...alert,
-        id: crypto.randomUUID(), // Add unique ID to each alert
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Fallback UUID for non-HTTPS contexts
       }));
   }, [config, formData]);
 

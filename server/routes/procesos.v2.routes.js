@@ -7,40 +7,12 @@
 
 const express = require('express');
 const router = express.Router();
-const sql = require('mssql');
+const { getPool, sql } = require('../config/database');
+const { FundOrchestrator } = require('../services/orchestration');
+const { ExecutionTracker, LoggingService } = require('../services/tracking');
 
-// Pool para Inteligencia_Producto_Dev
-let inteligenciaPool = null;
-
-const getInteligenciaPool = async () => {
-  if (inteligenciaPool && inteligenciaPool.connected) {
-    return inteligenciaPool;
-  }
-
-  const config = {
-    server: process.env.DB_SERVER,
-    database: 'Inteligencia_Producto_Dev',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    port: parseInt(process.env.DB_PORT) || 1433,
-    options: {
-      encrypt: process.env.DB_ENCRYPT === 'true',
-      trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
-      enableArithAbort: true,
-    },
-    pool: {
-      max: 10,
-      min: 0,
-      idleTimeoutMillis: 30000,
-    },
-    requestTimeout: 600000, // 10 minutos para procesos largos
-  };
-
-  inteligenciaPool = new sql.ConnectionPool(config);
-  await inteligenciaPool.connect();
-  console.log('Conectado a Inteligencia_Producto_Dev (v2)');
-  return inteligenciaPool;
-};
+// Usa el pool centralizado de Inteligencia_Producto_Dev
+const getInteligenciaPool = getPool;
 
 // ============================================
 // ALMACENAMIENTO EN MEMORIA PARA POLLING
@@ -99,11 +71,6 @@ router.post('/v2/ejecutar', async (req, res) => {
   try {
     const pool = await getInteligenciaPool();
 
-    // NOTA: El SP Process_Funds NO acepta ID_Ejecucion ni ID_Fund
-    // Solo procesa todos los fondos para la fecha dada
-    // Creamos un ID de ejecución sintético para tracking
-    const idEjecucion = Date.now(); // Timestamp como ID temporal
-
     if (idFund) {
       return res.status(400).json({
         success: false,
@@ -111,8 +78,14 @@ router.post('/v2/ejecutar', async (req, res) => {
       });
     }
 
-    const modoEjecucion = 'Todos los fondos';
-    console.log(`[Ejecución ${idEjecucion}] Iniciada para fecha ${fechaReporte} - Modo: ${modoEjecucion}`);
+    // Llamar a sp_Inicializar_Ejecucion para crear ejecución CON fondos
+    const initResult = await pool.request()
+      .input('FechaReporte', sql.NVarChar(10), fechaReporte)
+      .output('ID_Ejecucion', sql.BigInt)
+      .execute('logs.sp_Inicializar_Ejecucion');
+
+    const idEjecucion = initResult.output.ID_Ejecucion;
+    console.log(`[Ejecución ${idEjecucion}] Inicializada correctamente con fondos para fecha ${fechaReporte}`);
 
     // Guardar en memoria para tracking
     activeExecutions.set(idEjecucion, {
@@ -146,65 +119,76 @@ router.post('/v2/ejecutar', async (req, res) => {
   }
 });
 
-// Función para ejecutar el proceso en background
-// NOTA: Process_Funds solo acepta @FechaReporte, no acepta ID_Ejecucion ni ID_Fund
+// Función para ejecutar el proceso en background usando Pipeline V2
+// NUEVO: Usa FundOrchestrator con servicios individuales en vez de SP batch V1
 async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) {
   try {
-    // Insertar registro inicial en logs.Ejecuciones con IDENTITY_INSERT
-    await pool.request()
+    // La ejecución ya fue inicializada por sp_Inicializar_Ejecucion
+    // con todos los fondos activos registrados en logs.Ejecucion_Fondos
+
+    console.log(`[Ejecución ${idEjecucion}] Iniciando Pipeline V2 para fecha ${fechaReporte}...`);
+
+    // 1. Obtener fondos desde logs.Ejecucion_Fondos
+    const fondosResult = await pool.request()
       .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-      .input('FechaReporte', sql.Date, fechaReporte)
       .query(`
-        SET IDENTITY_INSERT logs.Ejecuciones ON;
-        INSERT INTO logs.Ejecuciones (ID_Ejecucion, FechaReporte, FechaInicio, Estado, Etapa_Actual)
-        VALUES (@ID_Ejecucion, @FechaReporte, GETDATE(), 'EN_PROGRESO', 'INICIANDO');
-        SET IDENTITY_INSERT logs.Ejecuciones OFF;
+        SELECT
+          ID_Fund, FundShortName,
+          Portfolio_Geneva, Portfolio_CAPM, Portfolio_Derivados, Portfolio_UBS,
+          Flag_UBS, Flag_Derivados, Requiere_Derivados
+        FROM logs.Ejecucion_Fondos
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND Incluir_En_Cubo = 1
+        ORDER BY ID_Fund
       `);
 
-    const request = pool.request();
+    const fondos = fondosResult.recordset;
+    console.log(`[Ejecución ${idEjecucion}] Fondos cargados: ${fondos.length}`);
 
-    // Solo pasar FechaReporte (único parámetro que acepta el SP)
-    request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
+    if (fondos.length === 0) {
+      throw new Error('No hay fondos activos para procesar');
+    }
 
-    // Timeout largo para el proceso
-    request.timeout = 600000; // 10 minutos
+    // 2. Instanciar servicios de tracking
+    const tracker = new ExecutionTracker(pool);
+    const logger = new LoggingService(pool);
 
-    // Capturar mensajes PRINT del SP
-    request.on('info', (info) => {
-      if (info.message) {
-        console.log(`[Ejecución ${idEjecucion}] ${info.message}`);
-      }
-    });
+    // 3. Crear y ejecutar orquestador V2
+    const orchestrator = new FundOrchestrator(
+      idEjecucion,
+      fechaReporte,
+      fondos,
+      pool,
+      tracker,
+      logger
+    );
 
-    // Ejecutar el orquestador (procesa TODOS los fondos)
-    console.log(`[Ejecución ${idEjecucion}] Iniciando Process_Funds para fecha ${fechaReporte}...`);
-    const result = await request.execute('process.Process_Funds');
-    console.log(`[Ejecución ${idEjecucion}] Process_Funds completado con código: ${result.returnValue}`);
+    await orchestrator.initialize();
+    console.log(`[Ejecución ${idEjecucion}] FundOrchestrator V2 inicializado`);
 
-    const estadoFinal = result.returnValue === 0 ? 'COMPLETADO' :
-                        result.returnValue === 1 ? 'PARCIAL' : 'ERROR';
+    const result = await orchestrator.execute();
+    console.log(`[Ejecución ${idEjecucion}] FundOrchestrator V2 completado exitosamente`);
 
-    // Actualizar estado en BD
+    // 4. Actualizar estado final en BD
     await pool.request()
       .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-      .input('Estado', sql.NVarChar, estadoFinal)
       .query(`
         UPDATE logs.Ejecuciones
-        SET Estado = @Estado,
-            FechaFin = GETDATE(),
-            Etapa_Actual = 'FINALIZADO'
+        SET Estado = 'COMPLETADO',
+            Etapa_Actual = 'COMPLETADO',
+            FechaFin = GETDATE()
         WHERE ID_Ejecucion = @ID_Ejecucion
       `);
 
-    // Actualizar estado en memoria
+    // 5. Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
-      estado: estadoFinal,
+      estado: 'COMPLETADO',
       finalizadoEn: new Date(),
     });
 
   } catch (err) {
-    console.error(`[Ejecución ${idEjecucion}] Error:`, err);
+    console.error(`[Ejecución ${idEjecucion}] Error en Pipeline V2:`, err);
 
     // Marcar ejecución como error en BD
     try {
@@ -222,6 +206,7 @@ async function executeProcessV2(pool, idEjecucion, fechaReporte, idFund = null) 
       console.error('Error actualizando estado:', updateErr);
     }
 
+    // Actualizar estado en memoria
     activeExecutions.set(idEjecucion, {
       ...activeExecutions.get(idEjecucion),
       estado: 'ERROR',
@@ -256,12 +241,36 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
       });
     }
 
-    // Obtener fondos con estado
+    // Obtener fondos con estado (solo columnas esenciales para reducir payload)
     const fondosResult = await pool.request()
       .input('ID_Ejecucion', sql.BigInt, id)
       .query(`
         SELECT
-          ef.*,
+          ef.ID,
+          ef.ID_Ejecucion,
+          ef.ID_Fund,
+          ef.FundShortName,
+          ef.Portfolio_Geneva,
+          ef.Portfolio_CAPM,
+          ef.Portfolio_Derivados,
+          ef.Portfolio_UBS,
+          -- Estados por etapa del pipeline (para visualización de barras)
+          ef.Estado_Extraccion,
+          ef.Estado_Process_IPA,
+          ef.Estado_Process_CAPM,
+          ef.Estado_Process_Derivados,
+          ef.Estado_Process_PNL,
+          ef.Estado_Process_UBS,
+          ef.Estado_Concatenar,
+          -- Estado final
+          ef.Estado_Final,
+          ef.Mensaje_Error,
+          ef.Fin_Procesamiento,
+          -- Flags
+          ef.Requiere_Derivados,
+          ef.Incluir_En_Cubo,
+          ef.Elegible_Reproceso,
+          -- Join FundName
           bf.FundName
         FROM logs.Ejecucion_Fondos ef
         LEFT JOIN dimensionales.BD_Funds bf ON CAST(ef.ID_Fund AS INT) = bf.ID_Fund

@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-const { getPool, closePool } = require('./config/database');
+const { getPool, getPoolHomologacion, closePool } = require('./config/database');
 
 // Importar rutas
 const catalogosRoutes = require('./routes/catalogos.routes');
@@ -33,12 +33,19 @@ app.use((req, res, next) => {
 // Health check
 app.get('/api/health', async (req, res) => {
   try {
-    const pool = await getPool();
-    const result = await pool.request().query('SELECT 1 as connected');
+    const poolPrincipal = await getPool();
+    const poolHomologacion = await getPoolHomologacion();
+
+    const result1 = await poolPrincipal.request().query('SELECT DB_NAME() as db');
+    const result2 = await poolHomologacion.request().query('SELECT DB_NAME() as db');
+
     res.json({
       success: true,
       status: 'healthy',
-      database: 'connected',
+      databases: {
+        principal: result1.recordset[0].db,
+        homologacion: result2.recordset[0].db,
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
@@ -140,10 +147,11 @@ const server = app.listen(PORT, HOST, async () => {
   console.log(`📚 API docs: http://localhost:${PORT}/api`);
   console.log(`❤️  Health check: http://localhost:${PORT}/api/health\n`);
 
-  // Probar conexión a BD
+  // Probar conexión a ambas BDs
   try {
     await getPool();
-    console.log('✅ Conexión a SQL Server establecida\n');
+    await getPoolHomologacion();
+    console.log('✅ Conexiones a SQL Server establecidas (ambas BDs)\n');
   } catch (err) {
     console.error('❌ Error conectando a SQL Server:', err.message);
     console.log('   Verifica la configuración en el archivo .env\n');

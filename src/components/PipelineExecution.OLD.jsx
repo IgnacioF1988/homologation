@@ -589,7 +589,8 @@ const PipelineExecution = ({ onExecutionComplete }) => {
   const [isExecuting, setIsExecuting] = useState(false);
   const [filterStatus, setFilterStatus] = useState('all');
   const pollingRef = useRef(null);
-  
+  const errorCountRef = useRef(0); // Contador de errores consecutivos de polling
+
   // Etapa actual del backend
   const etapaActual = ejecucion?.Etapa_Actual || null;
   
@@ -602,35 +603,34 @@ const PipelineExecution = ({ onExecutionComplete }) => {
     return fondos;
   }, [fondos, filterStatus]);
 
-  // Calcular estadísticas por etapa
-  const calculateStageStats = useCallback((fondosData) => {
-    const stats = {};
-    
-    PIPELINE_STAGES.forEach(stage => {
-      const field = stage.dbField;
-      stats[stage.id] = {
-        ok: fondosData.filter(f => f[field] === 'OK').length,
-        error: fondosData.filter(f => f[field] === 'ERROR').length,
-        warning: fondosData.filter(f => f[field] === 'WARNING').length,
-        na: fondosData.filter(f => f[field] === 'N/A').length,
-        pending: fondosData.filter(f => !f[field] || f[field] === 'EN_PROGRESO').length,
-      };
-    });
-    
-    setStageStats(stats);
-  }, []);
-  
+  // Polling con cálculo de estadísticas inline (sin dependencias inestables)
   const startPolling = useCallback((idEjecucion) => {
     if (pollingRef.current) clearInterval(pollingRef.current);
-    
+    errorCountRef.current = 0; // Reset error count al iniciar nuevo polling
+
     const poll = async () => {
       try {
         const response = await procesosService.getEjecucionEstado(idEjecucion);
         if (response.success) {
+          errorCountRef.current = 0; // Reset errores consecutivos en respuesta exitosa
           setEjecucion(response.data.ejecucion);
           setFondos(response.data.fondos || []);
-          calculateStageStats(response.data.fondos || []);
-          
+
+          // Calcular estadísticas por etapa INLINE (evita dependencia inestable)
+          const fondosData = response.data.fondos || [];
+          const stats = {};
+          PIPELINE_STAGES.forEach(stage => {
+            const field = stage.dbField;
+            stats[stage.id] = {
+              ok: fondosData.filter(f => f[field] === 'OK').length,
+              error: fondosData.filter(f => f[field] === 'ERROR').length,
+              warning: fondosData.filter(f => f[field] === 'WARNING').length,
+              na: fondosData.filter(f => f[field] === 'N/A').length,
+              pending: fondosData.filter(f => !f[field] || f[field] === 'EN_PROGRESO').length,
+            };
+          });
+          setStageStats(stats);
+
           const estado = response.data.ejecucion?.Estado;
           if (['COMPLETADO', 'PARCIAL', 'ERROR'].includes(estado)) {
             clearInterval(pollingRef.current);
@@ -642,12 +642,23 @@ const PipelineExecution = ({ onExecutionComplete }) => {
             }
           }
         }
-      } catch (err) { console.error('Error polling:', err); }
+      } catch (err) {
+        console.error('Error polling:', err);
+        errorCountRef.current += 1;
+
+        // Detener polling después de 5 errores consecutivos para prevenir loop infinito
+        if (errorCountRef.current >= 5) {
+          console.error('Polling detenido después de 5 errores consecutivos');
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setIsExecuting(false);
+        }
+      }
     };
 
     poll();
-    pollingRef.current = setInterval(poll, 1000); // Polling más frecuente para ver secuencia
-  }, [calculateStageStats]);
+    pollingRef.current = setInterval(poll, 2000); // Polling cada 2 segundos para reducir carga
+  }, []); // SIN DEPENDENCIAS - evita ciclo infinito de re-renders
   
   const handleEjecutar = useCallback(async () => {
     if (!fechaReporte) return;
@@ -737,14 +748,15 @@ const PipelineExecution = ({ onExecutionComplete }) => {
               >
                 Pipeline ETL
               </Typography>
-              <Typography variant="body2" sx={{ color: colors.text.tertiary, mt: 0.25 }}>
-                8 etapas • Procesamiento secuencial
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                <Typography variant="body2" sx={{ color: colors.text.tertiary }}>
+                  8 etapas • Procesamiento secuencial
+                </Typography>
                 {etapaActual && !isProcessFinished && (
                   <Chip
                     size="small"
                     label={etapaActual}
                     sx={{
-                      ml: 1,
                       height: 18,
                       fontSize: '0.625rem',
                       bgcolor: alpha(colors.primary.main, 0.08),
@@ -753,7 +765,7 @@ const PipelineExecution = ({ onExecutionComplete }) => {
                     }}
                   />
                 )}
-              </Typography>
+              </Box>
             </Box>
           </Box>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
@@ -863,10 +875,29 @@ const PipelineExecution = ({ onExecutionComplete }) => {
         {ejecucion && (
           <Box sx={{ display: 'flex', justifyContent: 'center', gap: 5, mt: 3, pt: 3, borderTop: `1px solid ${colors.border.light}` }}>
             {[
-              { value: ejecucion.FondosExitosos || 0, label: 'Exitosos', color: colors.success.main },
-              { value: ejecucion.FondosWarning || 0, label: 'Warnings', color: colors.warning.main },
-              { value: ejecucion.FondosFallidos || 0, label: 'Errores', color: colors.error.main },
-              { value: ejecucion.TiempoTotal_Segundos || '-', label: 'Segundos', color: colors.text.secondary },
+              {
+                value: ejecucion.FondosExitosos || fondos.filter(f => f.Estado_Final === 'COMPLETADO').length,
+                label: 'Exitosos',
+                color: colors.success.main
+              },
+              {
+                value: ejecucion.FondosWarning || fondos.filter(f => f.Estado_Final === 'WARNING').length,
+                label: 'Warnings',
+                color: colors.warning.main
+              },
+              {
+                value: ejecucion.FondosFallidos || fondos.filter(f => ['ERROR', 'PARCIAL'].includes(f.Estado_Final)).length,
+                label: 'Errores',
+                color: colors.error.main
+              },
+              {
+                value: ejecucion.TiempoTotal_Segundos ||
+                       (ejecucion.FechaInicio
+                         ? Math.floor((new Date() - new Date(ejecucion.FechaInicio)) / 1000)
+                         : 0),
+                label: 'Segundos',
+                color: colors.text.secondary
+              },
             ].map((item, i) => (
               <Box key={i} sx={{ textAlign: 'center' }}>
                 <Typography variant="h4" sx={{ color: item.color, fontWeight: 700, lineHeight: 1, fontSize: '1.5rem' }}>

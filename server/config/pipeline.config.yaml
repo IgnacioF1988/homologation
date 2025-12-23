@@ -1,0 +1,471 @@
+# ============================================
+# Configuración del Pipeline ETL - Fondos
+# Version: 3.0
+# ============================================
+
+version: "3.0"
+name: "Pipeline ETL Fondos - Arquitectura Paralela"
+description: "Orquestación paralela por fondo con manejo de dependencias y concurrencia multiusuario"
+
+# ============================================
+# CONFIGURACIÓN GLOBAL
+# ============================================
+global:
+  maxConcurrentFunds: 999            # Sin límite práctico - procesar todos los fondos en paralelo
+  maxConcurrentTasks: 2000           # Límite alto de tareas (SPs) en paralelo (incluye todas las ejecuciones)
+  retryAttempts: 3                   # Intentos de retry por fondo en caso de error recuperable
+  retryDelayMs: 5000                 # Delay entre reintentos (ms)
+  executionTimeoutMinutes: 60        # Timeout total de ejecución
+  pollIntervalMs: 2000               # Intervalo de polling para frontend (ms)
+
+# ============================================
+# DEFINICIÓN DE SERVICIOS (ETAPAS DEL PIPELINE)
+# ============================================
+services:
+  # ============================================
+  # FASE 0: EXTRACCION (Batch completo por fecha)
+  # ============================================
+  - id: EXTRACCION
+    name: "Extracción de Datos"
+    type: batch                      # Ejecuta toda la fecha (no por fondo individual)
+    dependencies: []                 # Sin dependencias previas (primer paso)
+    maxConcurrent: 1                 # Solo 1 extracción a la vez (procesa toda la fecha)
+    spList:
+      - name: extract.Extract_IPA
+        order: 1
+        parallel: true               # Puede ejecutarse en paralelo con otros extractores
+        timeout: 300000              # 5 minutos
+      - name: extract.Extract_PosModRF
+        order: 1
+        parallel: true
+        timeout: 180000
+      - name: extract.Extract_SONA
+        order: 1
+        parallel: true
+        timeout: 180000
+      - name: extract.Extract_CAPM
+        order: 1
+        parallel: true
+        timeout: 300000
+      - name: extract.Extract_Derivados
+        order: 1
+        parallel: true
+        timeout: 180000
+      - name: extract.Extract_UBS
+        order: 1
+        parallel: true
+        timeout: 180000
+      - name: extract.Extract_UBS_MonedaDerivados
+        order: 2                     # Depende de Extract_UBS
+        parallel: false
+        timeout: 120000
+      - name: extract.Extract_UBS_Patrimonio
+        order: 2                     # Depende de Extract_UBS
+        parallel: false
+        timeout: 120000
+    onError: STOP_ALL                # Error en extracción detiene toda la ejecución
+    tracking:
+      stateField: Estado_Extraccion
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 0.5: VALIDACION
+  # ============================================
+  - id: VALIDACION
+    name: "Validación de Datos Extraídos"
+    type: batch                      # Valida toda la fecha
+    dependencies: [EXTRACCION]       # Requiere extracción completa
+    maxConcurrent: 1
+    spList:
+      - name: process.Validar_FondosActivos
+        order: 1
+        parallel: false
+        timeout: 120000
+        validation:
+          checkRowCount: true
+    onError: LOG_WARNING             # Validación fallida solo logea, no detiene
+    tracking:
+      stateField: Estado_Validacion
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 1: PROCESS IPA (Crítico - por fondo)
+  # ============================================
+  - id: PROCESS_IPA
+    name: "Procesamiento IPA"
+    type: parallel                   # Paralelo por fondo individual
+    dependencies: [VALIDACION]       # Requiere validación exitosa
+    maxConcurrent: 999               # Sin límite - máxima paralelización
+    spList:
+      # Sub-pasos IPA en orden estricto (secuenciales por fondo)
+      - name: staging.IPA_01_RescatarLocalPrice_v2
+        order: 1
+        parallel: false
+        timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
+        tracking:
+          subStateField: Estado_IPA_01_RescatarLocalPrice
+      - name: staging.IPA_02_AjusteSONA_v2
+        order: 2
+        parallel: false
+        timeout: 120000
+        tracking:
+          subStateField: Estado_IPA_02_AjusteSONA
+      - name: staging.IPA_03_RenombrarCxCCxP_v2
+        order: 3
+        parallel: false
+        timeout: 120000
+        tracking:
+          subStateField: Estado_IPA_03_RenombrarCxCCxP
+      - name: staging.IPA_04_TratamientoSuciedades_v2
+        order: 4
+        parallel: false
+        timeout: 120000
+        tracking:
+          subStateField: Estado_IPA_04_TratamientoSuciedades
+      - name: staging.IPA_05_EliminarCajasMTM_v2
+        order: 5
+        parallel: false
+        timeout: 120000
+        tracking:
+          subStateField: Estado_IPA_05_EliminarCajasMTM
+      - name: staging.IPA_06_CrearDimensiones_v2
+        order: 6
+        parallel: false
+        timeout: 180000
+        tracking:
+          subStateField: Estado_IPA_06_CrearDimensiones
+      - name: staging.IPA_07_AgruparRegistros_v2
+        order: 7
+        parallel: false
+        timeout: 180000
+        validation:
+          checkRowCount: true
+          minRows: 1
+        tracking:
+          subStateField: Estado_IPA_07_AgruparRegistros
+    onError: STOP_FUND               # Error detiene procesamiento de este fondo (no afecta otros)
+    tracking:
+      stateField: Estado_Process_IPA
+      metricsEnabled: true
+      errorField: Paso_Con_Error
+
+  # ============================================
+  # FASE 2: PROCESS CAPM (Depende de IPA - por fondo)
+  # ============================================
+  - id: PROCESS_CAPM
+    name: "Procesamiento CAPM"
+    type: parallel
+    dependencies: [PROCESS_IPA]      # Requiere IPA exitoso (necesita IPA_Cash)
+    maxConcurrent: 999               # Sin límite - máxima paralelización
+    spList:
+      # CAPM_01: Calcula ajuste entre IPA_Cash y CAPM
+      - name: staging.CAPM_01_Ajuste_CAPM_v2
+        order: 1
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
+        tracking:
+          subStateField: Estado_CAPM_01_Ajuste
+      # CAPM_02: Extrae y homologa datos CAPM
+      - name: staging.CAPM_02_Extract_Transform_v2
+        order: 2
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
+        tracking:
+          subStateField: Estado_CAPM_02_ExtractTransform
+    onError: STOP_FUND               # Error detiene procesamiento de este fondo
+    tracking:
+      stateField: Estado_Process_CAPM
+      metricsEnabled: true
+      errorField: Paso_Con_Error
+
+  # ============================================
+  # FASE 2b: CAPM CONSOLIDACIÓN (Una vez por ejecución)
+  # ============================================
+  - id: CONSOLIDAR_CAPM
+    name: "Consolidación CAPM"
+    type: sequential                 # Se ejecuta UNA vez al final
+    dependencies: [PROCESS_CAPM]     # Después de procesar todos los fondos
+    spList:
+      # CAPM_03: Consolida todos los fondos procesados
+      - name: staging.CAPM_03_Carga_Final_v2
+        order: 1
+        timeout: 300000              # 5 minutos para consolidación
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+        validation:
+          checkRowCount: true
+        tracking:
+          subStateField: Estado_CAPM_03_CargaFinal
+    onError: STOP_ALL                # Error en consolidación detiene toda la ejecución
+    tracking:
+      stateField: Estado_Consolidar_CAPM
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 3: PROCESS DERIVADOS (Depende de IPA - por fondo)
+  # ============================================
+  - id: PROCESS_DERIVADOS
+    name: "Procesamiento Derivados"
+    type: parallel
+    dependencies: [PROCESS_IPA]
+    maxConcurrent: 999               # Sin límite - máxima paralelización
+    conditional: Requiere_Derivados  # Solo fondos que requieren derivados
+    spList:
+      - name: staging.DERIV_01_Tratamiento_Posiciones_Larga_Corta_v2
+        order: 1
+        parallel: false
+        timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Derivados
+        tracking:
+          subStateField: Estado_DERIV_01_Posiciones
+      - name: staging.DERIV_02_Homologar_Dimensiones_v2
+        order: 2
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+        tracking:
+          subStateField: Estado_DERIV_02_Dimensiones
+      - name: staging.DERIV_03_Ajuste_Derivados_v2
+        order: 3
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+        tracking:
+          subStateField: Estado_DERIV_03_Ajuste
+      - name: staging.DERIV_04_Parity_Adjust_v2
+        order: 4
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+        tracking:
+          subStateField: Estado_DERIV_04_Paridad
+    onError: CONTINUE                # Marcar como WARNING pero continuar
+    tracking:
+      stateField: Estado_Process_Derivados
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 4: PROCESS PNL (Depende de IPA - por fondo)
+  # ============================================
+  - id: PROCESS_PNL
+    name: "Procesamiento PNL"
+    type: parallel
+    dependencies: [PROCESS_IPA]
+    maxConcurrent: 999               # Sin límite - máxima paralelización
+    spList:
+      - name: staging.PNL_01_Dimensiones_v2
+        order: 1
+        parallel: false
+        timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_PNL
+        tracking:
+          subStateField: Estado_PNL_01_Dimensiones
+      - name: staging.PNL_02_Ajuste_v2
+        order: 2
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_PNL
+        tracking:
+          subStateField: Estado_PNL_02_Ajuste
+      - name: staging.PNL_03_Agrupacion_v2
+        order: 3
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_PNL
+        tracking:
+          subStateField: Estado_PNL_03_Agrupacion
+      - name: staging.PNL_04_CrearRegistrosAjusteIPA_v2
+        order: 4
+        parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_PNL
+        tracking:
+          subStateField: Estado_PNL_04_AjusteIPA
+      - name: staging.PNL_05_Consolidar_IPA_PNL_v2
+        order: 5
+        parallel: false
+        timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_PNL
+        tracking:
+          subStateField: Estado_PNL_05_Consolidar
+    onError: STOP_FUND
+    tracking:
+      stateField: Estado_Process_PNL
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 5: PROCESS UBS (INDEPENDIENTE - por fondo)
+  # ============================================
+  - id: PROCESS_UBS
+    name: "Procesamiento UBS (Fondos Luxemburgo)"
+    type: parallel
+    dependencies: [EXTRACCION]       # Solo requiere extracción, NO IPA (independiente)
+    maxConcurrent: 999               # Sin límite - máxima paralelización
+    conditional: Flag_UBS            # Solo ejecutar para fondos con Flag_UBS=1
+    spList:
+      - name: staging.UBS_01_Tratamiento_Fondos_Luxemburgo_v2
+        order: 1
+        parallel: false
+        timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_UBS
+        tracking:
+          subStateField: Estado_UBS_01_Tratamiento
+      - name: staging.UBS_02_Tratamiento_Derivados_MLCCII_v2
+        order: 2
+        parallel: false
+        timeout: 120000
+        conditional: Es_MLCCII       # Solo si el fondo es MLCCII
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+        tracking:
+          subStateField: Estado_UBS_02_Derivados
+      - name: staging.UBS_03_Creacion_Cartera_MLCCII_v2
+        order: 3
+        parallel: false
+        timeout: 120000
+        conditional: Es_MLCCII
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+        tracking:
+          subStateField: Estado_UBS_03_Cartera
+    onError: CONTINUE
+    tracking:
+      stateField: Estado_Process_UBS
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 6: CONCATENAR CUBO (Consolidación final)
+  # ============================================
+  - id: CONCATENAR
+    name: "Concatenar Cubo Final"
+    type: sequential                 # Debe esperar a TODOS los fondos (no paralelo)
+    dependencies: [PROCESS_CAPM, PROCESS_PNL, PROCESS_UBS]  # Requiere al menos 1 proceso exitoso
+    maxConcurrent: 1                 # No paralelizar (opera sobre todos los fondos juntos)
+    spList:
+      - name: staging.Concatenar_Cubo_v2
+        order: 1
+        parallel: false
+        timeout: 600000              # 10 minutos
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte              # Opera sobre TODOS los fondos de la fecha
+        validation:
+          checkRowCount: true
+          minRows: 1
+    onError: STOP_ALL                # Error crítico, detener ejecución completa
+    tracking:
+      stateField: Estado_Concatenar
+      metricsEnabled: true
+
+  # ============================================
+  # FASE 7: GRAPH SYNC (Opcional, solo si PNL OK)
+  # ============================================
+  - id: GRAPH_SYNC
+    name: "Sincronización a Base de Datos de Grafos"
+    type: sequential
+    dependencies: [PROCESS_PNL, CONCATENAR]
+    maxConcurrent: 1
+    conditional: PNL_Exitoso         # Solo si PNL fue exitoso
+    spList:
+      - name: process.Sync_PNL_To_Graph_v2
+        order: 1
+        parallel: false
+        timeout: 600000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+    onError: LOG_WARNING             # Solo logear, no detener
+    tracking:
+      stateField: Estado_Graph_Sync
+      metricsEnabled: false
+
+# ============================================
+# CONFIGURACIÓN DE BASES DE DATOS
+# ============================================
+databases:
+  primary:
+    database: Inteligencia_Producto_Dev
+    schema: process
+    timeout: 600000                  # 10 minutos
+
+  logging:
+    database: Inteligencia_Producto_Dev
+    schema: logs
+    timeout: 30000                   # 30 segundos
+
+# ============================================
+# CONFIGURACIÓN DE LOGGING
+# ============================================
+logging:
+  level: INFO                        # DEBUG, INFO, WARN, ERROR
+  logToDatabase: true
+  logToConsole: true
+  includeStackTrace: true
+  maxLogsPerExecution: 10000
+  bulkInsertBatchSize: 100           # Acumular 100 logs antes de bulk insert
+
+# ============================================
+# CONFIGURACIÓN DE RETRY
+# ============================================
+retry:
+  exponentialBackoff: true           # Usar exponential backoff (delay × attempt)
+  maxBackoffMs: 60000                # Máximo delay de 60 segundos
+  retryOnDeadlock: true              # Auto-retry en caso de deadlock (SQL error 1205)
+  retryOnTimeout: true               # Auto-retry en caso de timeout

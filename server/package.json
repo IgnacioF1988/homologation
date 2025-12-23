@@ -5,15 +5,21 @@
   "main": "index.js",
   "scripts": {
     "start": "node --max-old-space-size=4096 index.js",
-    "dev": "nodemon --max-old-space-size=4096 index.js"
+    "dev": "nodemon --max-old-space-size=4096 index.js",
+    "test:quick": "node quick_test_v2.js",
+    "test:full": "node test_pipeline_v2.js"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.13",
+    "axios": "^1.13.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "mssql": "^10.0.2"
+    "mssql": "^10.0.2",
+    "p-limit": "^3.1.0"
   },
   "devDependencies": {
+    "js-yaml": "^4.1.1",
     "nodemon": "^3.0.2"
   }
 }
