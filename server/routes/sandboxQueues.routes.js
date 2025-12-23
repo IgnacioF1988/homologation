@@ -512,6 +512,78 @@ router.post('/:queueType/resolve-batch', async (req, res) => {
 });
 
 // ============================================
+// HELPER: Actualizar contadores stand-by
+// ============================================
+async function _actualizarContadorStandBy(pool, queueType, item) {
+  const tipoProblemaMap = {
+    'suciedades': 'SUCIEDADES',
+    'descuadres': 'DESCUADRES',
+    'instrumentos': 'HOMOLOGACION',
+    'fondos': 'HOMOLOGACION',
+    'monedas': 'HOMOLOGACION',
+    'benchmarks': 'HOMOLOGACION'
+  };
+
+  const tipoProblema = tipoProblemaMap[queueType];
+  if (!tipoProblema) return; // Solo aplica para colas de stand-by
+
+  try {
+    // Incrementar contador de resueltos
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
+      .input('ID_Fund', sql.Int, item.ID_Fund || 0)
+      .input('TipoProblema', sql.NVarChar, tipoProblema)
+      .query(`
+        UPDATE Inteligencia_Producto_Dev.logs.FondosEnStandBy
+        SET ProblemasResueltos = ProblemasResueltos + 1
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND ID_Fund = @ID_Fund
+          AND TipoProblema = @TipoProblema
+          AND Estado = 'PENDIENTE';
+
+        -- Si todos resueltos, marcar APROBADO
+        UPDATE Inteligencia_Producto_Dev.logs.FondosEnStandBy
+        SET Estado = 'APROBADO', FechaResolucion = GETDATE()
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND ID_Fund = @ID_Fund
+          AND TipoProblema = @TipoProblema
+          AND ProblemasResueltos >= CantidadProblemas
+          AND Estado = 'PENDIENTE';
+      `);
+
+    // Verificar si TODOS los problemas están APROBADOS
+    const todosAprobados = await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
+      .input('ID_Fund', sql.Int, item.ID_Fund || 0)
+      .query(`
+        SELECT COUNT(*) as PendientesCount
+        FROM Inteligencia_Producto_Dev.logs.FondosEnStandBy
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND ID_Fund = @ID_Fund
+          AND Estado = 'PENDIENTE'
+      `);
+
+    if (todosAprobados.recordset[0].PendientesCount === 0) {
+      // Todos resueltos - marcar listo para resume
+      await pool.request()
+        .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
+        .input('ID_Fund', sql.Int, item.ID_Fund || 0)
+        .query(`
+          UPDATE Inteligencia_Producto_Dev.logs.Ejecucion_Fondos
+          SET EstadoStandBy = 'APROBADO'
+          WHERE ID_Ejecucion = @ID_Ejecucion
+            AND ID_Fund = @ID_Fund
+            AND EstadoStandBy = 'PAUSADO';
+        `);
+
+      console.log(`✅ Fondo ${item.ID_Fund} listo para resume (ejecución ${item.ID_Ejecucion})`);
+    }
+  } catch (error) {
+    console.warn(`[StandBy] Error actualizando contadores: ${error.message}`);
+  }
+}
+
+// ============================================
 // POST /api/sandbox-queues/:queueType/resolve - Resolver y escribir en dimensional
 // ============================================
 router.post('/:queueType/resolve', async (req, res) => {
@@ -803,6 +875,9 @@ router.post('/:queueType/resolve', async (req, res) => {
             WHERE id = @id
           `);
 
+        // NUEVO: Actualizar contadores stand-by
+        await _actualizarContadorStandBy(pool, queueType, item);
+
         // Retornar aquí para evitar el UPDATE genérico
         return res.json({
           success: true,
@@ -824,6 +899,9 @@ router.post('/:queueType/resolve', async (req, res) => {
       .input('id', sql.Int, parseInt(id))
       .input('estado', sql.NVarChar, nuevoEstado)
       .query(`UPDATE ${config.table} SET estado = @estado, fechaProcesado = GETDATE() WHERE id = @id`);
+
+    // NUEVO: Actualizar contadores stand-by
+    await _actualizarContadorStandBy(pool, queueType, item);
 
     res.json({
       success: true,

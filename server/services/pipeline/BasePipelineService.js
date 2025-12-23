@@ -216,6 +216,39 @@ class BasePipelineService {
     // Log inicio
     await this.logDebug(idEjecucion, fund.ID_Fund, `Ejecutando ${spName}...`);
 
+    // ============================================
+    // FIX: Normalizar fechaReporte antes de pasar a SP
+    // ============================================
+    // SQL Server retorna columnas DATE como Date objects.
+    // Los SPs esperan NVARCHAR(10) en formato 'YYYY-MM-DD'.
+    // Si pasamos Date object, mssql driver lanza:
+    // "Validation failed for parameter 'FechaReporte'. Invalid string"
+    // Este error tiene severity 16 → crea uncommittable transaction
+    let fechaReporteParam = fechaReporte;
+
+    if (fechaReporteParam instanceof Date) {
+      const year = fechaReporteParam.getFullYear();
+      const month = String(fechaReporteParam.getMonth() + 1).padStart(2, '0');
+      const day = String(fechaReporteParam.getDate()).padStart(2, '0');
+      fechaReporteParam = `${year}-${month}-${day}`;
+    }
+
+    // Validar que sea string válido
+    if (typeof fechaReporteParam !== 'string' || fechaReporteParam.trim() === '') {
+      const error = new Error(
+        `FechaReporte inválido después de conversión: ${typeof fechaReporteParam} = "${fechaReporteParam}"`
+      );
+      await this.logError(
+        idEjecucion,
+        fund.ID_Fund,
+        `CRITICAL: ${error.message} - SP: ${spName}`
+      );
+      throw error;
+    }
+    // ============================================
+    // FIN FIX fechaReporte
+    // ============================================
+
     // Construir request usando la transacción (mantiene temp tables)
     const request = transaction.request();
 
@@ -226,7 +259,7 @@ class BasePipelineService {
 
     // Agregar parámetros de entrada
     request.input('ID_Ejecucion', sql.BigInt, idEjecucion);
-    request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
+    request.input('FechaReporte', sql.NVarChar(10), fechaReporteParam);
     // ID_Fund viene como INT desde logs.Ejecucion_Fondos (después de migración SQL)
     request.input('ID_Fund', sql.Int, fund.ID_Fund);
 
@@ -574,21 +607,56 @@ class BasePipelineService {
    * @param {String} tipoProblema - Descripción del problema
    */
   async registerFundProblem(idEjecucion, idFund, proceso, tipoProblema) {
+    // FIX: Usar nueva conexión independiente para evitar conflictos con transacciones activas
+    // Bug: En concurrencia alta, registerFundProblem() puede ejecutarse mientras otros fondos
+    // tienen transacciones activas en this.pool, causando uncommittable transactions
+    let independentRequest = null;
+
     try {
+      // Crear request independiente (NO usa transacciones activas de otros fondos)
+      independentRequest = this.pool.request();
+
       // Obtener fechaReporte de la ejecución
-      const ejecResult = await this.pool.request()
+      const ejecResult = await independentRequest
         .input('ID_Ejecucion', sql.BigInt, idEjecucion)
         .query('SELECT FechaReporte FROM logs.Ejecuciones WHERE ID_Ejecucion = @ID_Ejecucion');
 
-      const fechaReporte = ejecResult.recordset[0]?.FechaReporte;
+      let fechaReporte = ejecResult.recordset[0]?.FechaReporte;
 
+      // FIX: Validar y normalizar fechaReporte exhaustivamente antes de usar .input()
+      // Bug original: fechaReporte undefined/inválido causa uncommittable transaction
       if (!fechaReporte) {
         console.warn(`[BasePipelineService] No se pudo obtener FechaReporte para ID_Ejecucion=${idEjecucion}`);
         return;
       }
 
+      // FIX: Si es un Date object, convertir a string YYYY-MM-DD
+      // SQL Server puede retornar DATE/DATETIME como Date object
+      if (fechaReporte instanceof Date) {
+        const year = fechaReporte.getFullYear();
+        const month = String(fechaReporte.getMonth() + 1).padStart(2, '0');
+        const day = String(fechaReporte.getDate()).padStart(2, '0');
+        fechaReporte = `${year}-${month}-${day}`;
+      }
+
+      // Validar que sea un string válido
+      if (typeof fechaReporte !== 'string') {
+        console.warn(`[BasePipelineService] FechaReporte no es string después de conversión (tipo: ${typeof fechaReporte}, valor: ${fechaReporte})`);
+        return;
+      }
+
+      // Validar que no sea string vacío
+      if (fechaReporte.trim() === '') {
+        console.warn(`[BasePipelineService] FechaReporte es string vacío`);
+        return;
+      }
+
+      // Crear NUEVA request independiente para el INSERT
+      // (No reutilizar la anterior porque ya se usó para SELECT)
+      const insertRequest = this.pool.request();
+
       // Registrar problema (evitar duplicados)
-      await this.pool.request()
+      await insertRequest
         .input('FechaReporte', sql.NVarChar(10), fechaReporte)
         .input('ID_Fund', sql.Int, idFund)
         .input('Proceso', sql.NVarChar(50), proceso)

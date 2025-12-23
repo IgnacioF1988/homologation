@@ -83,7 +83,7 @@ services:
         timeout: 120000
         validation:
           checkRowCount: true
-    onError: LOG_WARNING             # Validación fallida solo logea, no detiene
+    onError: STOP_ALL                # CAMBIO: Validación fallida detiene ejecución (fondos sin datos son críticos)
     tracking:
       stateField: Estado_Validacion
       metricsEnabled: true

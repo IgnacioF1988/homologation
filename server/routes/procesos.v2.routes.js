@@ -867,4 +867,166 @@ router.get('/v2/ejecucion/:id/diagnostico', async (req, res) => {
   }
 });
 
+// ============================================
+// GET /api/procesos/v2/fondos-en-standby
+// Lista fondos pausados esperando aprobación
+// ============================================
+router.get('/v2/fondos-en-standby', async (req, res) => {
+  try {
+    const pool = await getInteligenciaPool();
+
+    const result = await pool.request().query(`
+      SELECT
+        fsb.ID_Ejecucion, fsb.ID_Fund, f.FundShortName, f.FundName,
+        fsb.TipoProblema, fsb.MotivoDetallado, fsb.Estado,
+        fsb.PuntoBloqueo, fsb.CantidadProblemas, fsb.ProblemasResueltos,
+        fsb.FechaDeteccion, e.FechaReporte, e.Estado as EstadoEjecucion,
+        ef.EstadoStandBy, ef.PuntoBloqueoActual
+      FROM logs.FondosEnStandBy fsb
+      INNER JOIN dimensionales.BD_Funds f ON fsb.ID_Fund = f.ID_Fund
+      INNER JOIN logs.Ejecuciones e ON fsb.ID_Ejecucion = e.ID_Ejecucion
+      LEFT JOIN logs.Ejecucion_Fondos ef
+        ON fsb.ID_Ejecucion = ef.ID_Ejecucion AND fsb.ID_Fund = ef.ID_Fund
+      WHERE fsb.Estado IN ('PENDIENTE', 'APROBADO')
+      ORDER BY fsb.FechaDeteccion DESC
+    `);
+
+    res.json({ success: true, data: result.recordset });
+
+  } catch (error) {
+    console.error('Error obteniendo fondos en stand-by:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// POST /api/procesos/v2/:idEjecucion/resume/:idFund
+// Resumir fondo pausado después de aprobación
+// ============================================
+router.post('/v2/:idEjecucion/resume/:idFund', async (req, res) => {
+  const { idEjecucion, idFund } = req.params;
+
+  try {
+    const pool = await getInteligenciaPool();
+
+    // 1. Verificar estado
+    const estadoResult = await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('ID_Fund', sql.Int, idFund)
+      .query(`
+        SELECT EstadoStandBy, PuntoBloqueoActual
+        FROM logs.Ejecucion_Fondos
+        WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund
+      `);
+
+    if (estadoResult.recordset.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Fondo no encontrado en esta ejecución'
+      });
+    }
+
+    const estado = estadoResult.recordset[0];
+
+    if (estado.EstadoStandBy !== 'APROBADO') {
+      return res.status(400).json({
+        success: false,
+        error: `Estado actual: ${estado.EstadoStandBy}. Debe estar APROBADO para poder resumir.`
+      });
+    }
+
+    // 2. Determinar servicios a ejecutar según punto de bloqueo
+    const puntosResume = {
+      'ANTES_CAPM': ['PROCESS_CAPM', 'PROCESS_PNL'],
+      'ANTES_PNL': ['PROCESS_PNL'],
+      'MID_IPA': null, // Requiere re-ejecución manual completa
+      'MID_CAPM': null, // Requiere re-ejecución manual completa
+      'MID_PNL': null, // Requiere re-ejecución manual completa
+      'MID_DERIVADOS': null, // Requiere re-ejecución manual completa
+      'POST_DERIVADOS': [], // Ya completó, solo limpiar estado
+      'POST_PNL': [] // Ya completó, solo limpiar estado
+    };
+
+    const servicios = puntosResume[estado.PuntoBloqueoActual];
+
+    if (servicios === null) {
+      return res.status(400).json({
+        success: false,
+        error: `Pausa en ${estado.PuntoBloqueoActual} requiere re-ejecución manual completa del fondo desde Mission Control`
+      });
+    }
+
+    // 3. Actualizar estado a EN_RESUMEN
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('ID_Fund', sql.Int, idFund)
+      .query(`
+        UPDATE logs.Ejecucion_Fondos
+        SET EstadoStandBy = 'EN_RESUMEN',
+            FechaUltimoResume = GETDATE()
+        WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund;
+      `);
+
+    // 4. Re-ejecutar servicios pendientes si hay alguno
+    if (servicios.length > 0) {
+      // Obtener fecha reporte de la ejecución
+      const ejecResult = await pool.request()
+        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+        .query('SELECT FechaReporte FROM logs.Ejecuciones WHERE ID_Ejecucion = @ID_Ejecucion');
+
+      const fechaReporte = ejecResult.recordset[0]?.FechaReporte;
+
+      if (fechaReporte) {
+        // Ejecutar servicios en background
+        console.log(`[Resume] Iniciando re-ejecución de servicios para fondo ${idFund}: ${servicios.join(', ')}`);
+        // TODO: Implementar lógica de orquestación para ejecutar solo servicios específicos
+        // Por ahora retornamos la lista de servicios que deberían ejecutarse
+      }
+    }
+
+    // 5. Limpiar estado stand-by
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('ID_Fund', sql.Int, idFund)
+      .query(`
+        UPDATE logs.Ejecucion_Fondos
+        SET EstadoStandBy = NULL,
+            PuntoBloqueoActual = NULL,
+            ContadorPauses = ISNULL(ContadorPauses, 0)
+        WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund;
+
+        UPDATE logs.FondosEnStandBy
+        SET FechaResume = GETDATE()
+        WHERE ID_Ejecucion = @ID_Ejecucion
+          AND ID_Fund = @ID_Fund
+          AND Estado = 'APROBADO';
+      `);
+
+    // Registrar log
+    await pool.request()
+      .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+      .input('ID_Fund', sql.Int, idFund)
+      .query(`
+        INSERT INTO logs.Ejecucion_Logs (ID_Ejecucion, ID_Fund, Nivel, Categoria, Etapa, Mensaje)
+        VALUES (@ID_Ejecucion, @ID_Fund, 'INFO', 'SISTEMA', 'RESUME',
+                'Fondo resumido después de aprobación stand-by')
+      `);
+
+    res.json({
+      success: true,
+      message: `Fondo ${idFund} resumido exitosamente desde ${estado.PuntoBloqueoActual}`,
+      data: {
+        ID_Ejecucion: parseInt(idEjecucion),
+        ID_Fund: parseInt(idFund),
+        PuntoBloqueoAnterior: estado.PuntoBloqueoActual,
+        ServiciosPendientes: servicios,
+      }
+    });
+
+  } catch (err) {
+    console.error('Error resumiendo fondo:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
