@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const { getPool, closePool } = require('./config/database');
 
@@ -12,7 +13,7 @@ const colaPendientesRoutes = require('./routes/colaPendientes.routes');
 const procesosV2Routes = require('./routes/procesos.v2.routes');
 const sandboxQueuesRoutes = require('./routes/sandboxQueues.routes');
 const logsRoutes = require('./routes/logs.routes');
-const cuboRoutes = require('./routes/cubo.routes');
+const bloombergRoutes = require('./routes/bloomberg.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -63,8 +64,8 @@ app.use('/api/procesos', procesosV2Routes);
 app.use('/api/sandbox-queues', sandboxQueuesRoutes);
 // Rutas de logs
 app.use('/api/logs', logsRoutes);
-// Rutas del cubo IPA (Visualizador)
-app.use('/api/cubo', cuboRoutes);
+// Rutas de Bloomberg job queue
+app.use('/api/bloomberg', bloombergRoutes);
 
 // Ruta raíz
 app.get('/api', (req, res) => {
@@ -115,6 +116,16 @@ app.get('/api', (req, res) => {
         update: 'PUT /api/cola-pendientes/:id',
         delete: 'DELETE /api/cola-pendientes/:id',
       },
+      bloomberg: {
+        instruments: 'GET /api/bloomberg/instruments',
+        createJob: 'POST /api/bloomberg/jobs',
+        getJob: 'GET /api/bloomberg/jobs/:job_id',
+        getJobs: 'GET /api/bloomberg/jobs',
+        summary: 'GET /api/bloomberg/summary',
+        cleanup: 'POST /api/bloomberg/cleanup',
+        cashflows: 'GET /api/bloomberg/cashflows/:pk2',
+        logs: 'GET /api/bloomberg/logs',
+      },
     },
   });
 });
@@ -151,6 +162,12 @@ const server = app.listen(PORT, HOST, async () => {
     console.error('❌ Error conectando a SQL Server:', err.message);
     console.log('   Verifica la configuración en el archivo .env\n');
   }
+
+  // ============================================
+  // JOBS DE SINCRONIZACIÓN - ELIMINADOS
+  // ============================================
+  // Sistema de sincronización bidireccional eliminado el 2025-12-18
+  console.log('ℹ️  Sistema de sincronización legacy descontinuado\n');
 });
 
 // Graceful shutdown

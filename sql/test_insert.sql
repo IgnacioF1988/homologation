@@ -1,0 +1,2 @@
+DELETE FROM sandbox.colaPendientes WHERE idInstrumentoOrigen = '445';
+INSERT INTO sandbox.colaPendientes (idInstrumentoOrigen, nombreInstrumentoOrigen, nombreFuente, fuente, moneda, estado, prioridad, datosOrigen, fechaIngreso, fechaProcesado, subId) VALUES ('445', 'AES 7.75 144A', 'AES 7.75 144A', 'MANUAL', 1, 'completado', 'normal', '{"ID_Instrumento":445,"SubID":1,"isin":"US00107VAA17","yield_Source":"BBG"}', GETDATE(), GETDATE(), '1');
