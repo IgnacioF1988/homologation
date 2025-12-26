@@ -14,8 +14,8 @@ const baseConfig = {
     ...(process.env.DB_INSTANCE_NAME && { instanceName: process.env.DB_INSTANCE_NAME }),
   },
   pool: {
-    max: 300,     // Pool grande para paralelización masiva (múltiples ejecuciones × 100+ fondos simultáneos)
-    min: 20,      // Mantener conexiones baseline para respuesta rápida
+    max: 50,      // Pool optimizado: 5 fondos × 4 SPs paralelos × 2 (margen) = ~40 conexiones
+    min: 10,      // Conexiones baseline reducidas
     idleTimeoutMillis: 30000,
   },
   authentication: process.env.DB_USER ? {
