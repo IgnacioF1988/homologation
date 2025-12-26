@@ -32,8 +32,9 @@ class FundOrchestrator {
    * @param {Object} pool - Connection pool de SQL Server
    * @param {Object} tracker - ExecutionTracker para actualizar estados
    * @param {Object} logger - LoggingService para registrar eventos
+   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(idEjecucion, idProceso, fechaReporte, fondos, pool, tracker, logger) {
+  constructor(idEjecucion, idProceso, fechaReporte, fondos, pool, tracker, logger, trace = null) {
     // Validación: arquitectura jerárquica requiere 1 fondo por orquestador
     if (!Array.isArray(fondos) || fondos.length !== 1) {
       throw new Error(
@@ -50,6 +51,7 @@ class FundOrchestrator {
     this.pool = pool;
     this.tracker = tracker;
     this.logger = logger;
+    this.trace = trace;
 
     this.config = null; // pipeline.config.yaml
     this.serviceInstances = new Map();
@@ -176,7 +178,7 @@ class FundOrchestrator {
       if (ServiceClass) {
         this.serviceInstances.set(
           svcConfig.id,
-          new ServiceClass(svcConfig, this.pool, this.tracker, this.logger)
+          new ServiceClass(svcConfig, this.pool, this.tracker, this.logger, this.trace)
         );
         console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio instanciado: ${svcConfig.id}`);
       } else {
@@ -240,6 +242,13 @@ class FundOrchestrator {
       // Actualizar stats finales
       await this._updateExecutionStats('COMPLETADO');
       console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecución completada exitosamente`);
+
+      // TRACE: Flush buffered trace records
+      if (this.trace) {
+        await this.trace.flush();
+        console.log(`[FundOrchestrator ${this.idEjecucion}] Trace records flushed (buffer: ${this.trace.getBufferSize()})`);
+      }
+
       return { success: true, idEjecucion: this.idEjecucion };
 
     } catch (error) {
@@ -250,6 +259,16 @@ class FundOrchestrator {
         await this._updateExecutionStats('ERROR');
       } catch (statsError) {
         console.error(`[FundOrchestrator ${this.idEjecucion}] Error actualizando stats:`, statsError);
+      }
+
+      // TRACE: Flush buffered trace records even on error
+      if (this.trace) {
+        try {
+          await this.trace.flush();
+          console.log(`[FundOrchestrator ${this.idEjecucion}] Trace records flushed after error (buffer: ${this.trace.getBufferSize()})`);
+        } catch (traceError) {
+          console.warn(`[FundOrchestrator ${this.idEjecucion}] Error flushing trace:`, traceError.message);
+        }
       }
 
       throw error;
@@ -523,6 +542,7 @@ class FundOrchestrator {
 
         const context = {
           idEjecucion: this.idEjecucion,
+          idProceso: this.idProceso,
           fechaReporte: this.fechaReporte,
           fund
         };

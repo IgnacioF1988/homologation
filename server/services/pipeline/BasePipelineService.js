@@ -50,8 +50,9 @@ class BasePipelineService {
    * @param {Object} pool - Connection pool de SQL Server
    * @param {Object} tracker - ExecutionTracker para actualizar estados
    * @param {Object} logger - LoggingService para registrar eventos
+   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(serviceConfig, pool, tracker, logger) {
+  constructor(serviceConfig, pool, tracker, logger, trace = null) {
     if (!serviceConfig || !serviceConfig.id) {
       throw new Error('serviceConfig debe incluir un ID');
     }
@@ -60,6 +61,7 @@ class BasePipelineService {
     this.pool = pool;
     this.tracker = tracker;
     this.logger = logger;
+    this.trace = trace;
     this.id = serviceConfig.id;
     this.name = serviceConfig.name || serviceConfig.id;
   }
@@ -80,8 +82,20 @@ class BasePipelineService {
    * @returns {Promise<Object>} - { success, duration, metrics, skipped }
    */
   async execute(context) {
-    const { idEjecucion, fechaReporte, fund } = context;
+    const { idEjecucion, idProceso, fechaReporte, fund } = context;
     const startTime = Date.now();
+
+    // TRACE: Record service start
+    if (this.trace) {
+      await this.trace.recordStart(
+        idProceso,
+        idEjecucion,
+        fund.ID_Fund,
+        this.id,
+        `staging.${this.id}_WorkTable`,
+        { portfolio: fund.Portfolio_Geneva, fundName: fund.FundShortName }
+      );
+    }
 
     // IMPORTANTE: Usar una Transaction para mantener temp tables entre SPs
     // (las transacciones mantienen el mismo contexto de sesión para temp tables)
@@ -92,6 +106,20 @@ class BasePipelineService {
       if (this.config.conditional && !this.shouldExecute(fund)) {
         await this.logInfo(idEjecucion, fund.ID_Fund, `Servicio omitido (condicional: ${this.config.conditional})`);
         await this.updateState(idEjecucion, fund.ID_Fund, 'N/A');
+
+        // TRACE: Record skipped end
+        if (this.trace) {
+          await this.trace.recordEnd(
+            idProceso,
+            idEjecucion,
+            fund.ID_Fund,
+            this.id,
+            `staging.${this.id}_WorkTable`,
+            Date.now() - startTime,
+            { skipped: true, reason: this.config.conditional }
+          );
+        }
+
         return { success: true, skipped: true, duration: 0 };
       }
 
@@ -147,6 +175,19 @@ class BasePipelineService {
       await this.updateState(idEjecucion, fund.ID_Fund, 'OK');
       await this.logInfo(idEjecucion, fund.ID_Fund, `${this.name} completado en ${duration}ms`);
 
+      // TRACE: Record successful end
+      if (this.trace) {
+        await this.trace.recordEnd(
+          idProceso,
+          idEjecucion,
+          fund.ID_Fund,
+          this.id,
+          `staging.${this.id}_WorkTable`,
+          duration,
+          { success: true }
+        );
+      }
+
       return { success: true, duration };
 
     } catch (error) {
@@ -159,6 +200,18 @@ class BasePipelineService {
         } catch (rollbackErr) {
           console.warn('[BasePipelineService] Error en rollback:', rollbackErr.message);
         }
+      }
+
+      // TRACE: Record error
+      if (this.trace) {
+        await this.trace.recordError(
+          idProceso,
+          idEjecucion,
+          fund.ID_Fund,
+          this.id,
+          error.message,
+          { duration, errorType: error.name, stack: error.stack?.substring(0, 500) }
+        );
       }
 
       await this.handleError(error, context);

@@ -25,12 +25,14 @@ class ExtractionService {
    * @param {Object} pool - Connection pool de SQL Server
    * @param {Object} tracker - ExecutionTracker (no se usa en batch, pero se mantiene consistencia)
    * @param {Object} logger - LoggingService para registrar eventos
+   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(serviceConfig, pool, tracker, logger) {
+  constructor(serviceConfig, pool, tracker, logger, trace = null) {
     this.config = serviceConfig;
     this.pool = pool;
     this.tracker = tracker;
     this.logger = logger;
+    this.trace = trace;
     this.id = serviceConfig.id;
     this.name = serviceConfig.name || serviceConfig.id;
   }

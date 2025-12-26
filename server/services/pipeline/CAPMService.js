@@ -34,9 +34,10 @@ class CAPMService extends BasePipelineService {
    * @param {Object} pool - Connection pool de SQL Server
    * @param {Object} tracker - ExecutionTracker para actualizar estados
    * @param {Object} logger - LoggingService para registrar eventos
+   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(serviceConfig, pool, tracker, logger) {
-    super(serviceConfig, pool, tracker, logger);
+  constructor(serviceConfig, pool, tracker, logger, trace = null) {
+    super(serviceConfig, pool, tracker, logger, trace);
 
     // Validar que la configuración tenga los 2 SPs del grupo CAPM
     if (!this.config.spList || this.config.spList.length !== 2) {

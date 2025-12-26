@@ -158,6 +158,8 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
     // 2. Instanciar servicios de tracking compartidos
     const tracker = new ExecutionTracker(pool);
     const logger = new LoggingService(pool);
+    const TraceService = require('../services/tracking/TraceService');
+    const trace = new TraceService(pool, 100); // Buffer size = 100
 
     // 3. Crear un orquestador por cada ejecución (un fondo por orquestador)
     const orchestrators = ejecuciones.map(ejecucion => {
@@ -180,7 +182,8 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
         [fondoData],              // Array de UN SOLO fondo
         pool,
         tracker,
-        logger
+        logger,
+        trace                     // TraceService compartido para trazabilidad
       );
     });
 
