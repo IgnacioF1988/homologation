@@ -38,11 +38,11 @@
  *
  * DEPENDENCIAS:
  * - Requiere: pipeline.config.yaml, DependencyResolver, servicios del pipeline
- * - Requerido por: procesos.v2.routes.js (ejecuta N orquestadores vía WorkerPool)
+ * - Requerido por: procesos.v2.routes.js (ejecuta N orquestadores en paralelo con Promise.all)
  *
  * CONTEXTO PARALELO:
  * - Arquitectura jerárquica: 1 Orquestador = 1 Fondo = 1 ID_Ejecucion
- * - Múltiples orquestadores ejecutan en paralelo (WorkerPool controla concurrencia)
+ * - Múltiples orquestadores ejecutan en paralelo (Promise.all, concurrencia ilimitada)
  * - Cada fondo aislado: propia conexión SQL, propias temp tables (#temp_*_[ID_Ejecucion]_[ID_Fund])
  * - Sin contención: RCSI habilitado + tablas temporales únicas por fondo
  * - Validación defensiva: ID_Ejecucion > 0 y ID_Fund > 0 previenen race conditions

@@ -5,11 +5,9 @@
  */
 
 const DependencyResolver = require('./DependencyResolver');
-const WorkerPool = require('./WorkerPool');
 const FundOrchestrator = require('./FundOrchestrator');
 
 module.exports = {
   DependencyResolver,
-  WorkerPool,
   FundOrchestrator,
 };
