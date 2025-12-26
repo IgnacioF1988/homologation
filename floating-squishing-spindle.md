@@ -282,3 +282,152 @@ Al finalizar:
 - ✅ WorkerPool resuelto (eliminado o implementado)
 - ✅ Comentarios actualizados
 - ✅ Base de datos limpia y mantenible
+
+---
+
+## ESTADO DE EJECUCIÓN (2025-12-26)
+
+### ✅ FASE 1 - COMPLETADA (Commit: 35ce282)
+**Fecha:** 2025-12-26 15:30
+
+**Acciones realizadas:**
+- ✅ Creado script `006_drop_legacy_backup_tables.sql` (267 líneas)
+- ✅ Eliminado `src/components/PipelineExecution.OLD.jsx` (1,123 líneas)
+- ✅ Verificado que no hay referencias en el código
+
+**Commit:**
+```
+35ce282 refactor: Fase 1 - Eliminar componentes legacy obsoletos del pipeline
+- database/migrations/006_drop_legacy_backup_tables.sql (+267)
+- src/components/PipelineExecution.OLD.jsx (-1123)
+```
+
+---
+
+### ✅ FASE 2 - COMPLETADA (Commit: 9dc5c83)
+**Fecha:** 2025-12-26 15:33
+
+**Acciones realizadas:**
+- ✅ Eliminado `server/services/orchestration/WorkerPool.js` (233 líneas)
+- ✅ Removido export de WorkerPool en `orchestration/index.js`
+- ✅ Actualizado comentarios en `FundOrchestrator.js`
+
+**Commit:**
+```
+9dc5c83 refactor: Fase 2 - Eliminar WorkerPool no utilizado y actualizar documentación
+- server/services/orchestration/WorkerPool.js (-233)
+- server/services/orchestration/FundOrchestrator.js (~4)
+- server/services/orchestration/index.js (-2)
+```
+
+---
+
+### ✅ FASE 3 - COMPLETADA (Commit: 39cf1d4)
+**Fecha:** 2025-12-26 15:38
+
+**Acciones realizadas:**
+- ✅ Creado script `007_drop_legacy_v1_stored_procedures.sql` (435 líneas)
+- ✅ Verificado que no hay referencias a SPs V1 en el código
+- ✅ Confirmado existencia de 23 SPs V1 en base de datos
+
+**Commit:**
+```
+39cf1d4 refactor: Fase 3 - Crear migración para eliminar 23 SPs V1 legacy
+- database/migrations/007_drop_legacy_v1_stored_procedures.sql (+435)
+```
+
+---
+
+### ✅ FASE 4 - EJECUCIÓN DE MIGRACIONES COMPLETADA
+**Fecha:** 2025-12-26 15:46-15:48
+
+**Migración 006 - Tablas Backup:**
+```
+Ejecutada: 2025-12-26 15:46:50
+Resultado: ✅ ÉXITO
+- Tablas eliminadas: 1 (extract.PNL_1)
+- Tablas no encontradas: 13 (ya eliminadas previamente)
+- Total procesadas: 14
+```
+
+**Migración 007 - SPs V1 Legacy:**
+```
+Ejecutada: 2025-12-26 15:47:02
+Resultado: ✅ ÉXITO TOTAL
+- SPs eliminados: 23/23 (100%)
+- SPs no encontrados: 0
+- Grupos procesados:
+  * IPA: 7 SPs ✓
+  * CAPM: 3 SPs ✓
+  * PNL: 5 SPs ✓
+  * DERIVADOS: 4 SPs ✓
+  * UBS: 3 SPs ✓
+  * Otros: 1 SP ✓
+```
+
+**Impacto total verificado:**
+- ✅ 0 errores durante ejecución
+- ✅ 0 cambios funcionales (todo era código no utilizado)
+- ✅ Base de datos limpia de componentes V1 legacy
+- ✅ 23 SPs obsoletos eliminados permanentemente
+- ✅ 1 tabla backup eliminada (13 ya no existían)
+
+---
+
+## RESUMEN FINAL DE LIMPIEZA
+
+### Código eliminado (Fases 1-3):
+- **1,356+ líneas** de código JavaScript eliminadas
+- **2 archivos** JavaScript eliminados (PipelineExecution.OLD.jsx, WorkerPool.js)
+- **14 tablas** de backup marcadas para eliminación
+- **23 SPs V1** marcados para eliminación
+
+### Base de datos limpiada (Fase 4):
+- **23 SPs V1** eliminados exitosamente ✅
+- **1 tabla** de backup eliminada (extract.PNL_1) ✅
+- **13 tablas** no existían (ya eliminadas previamente)
+
+### Commits realizados:
+1. `35ce282` - Fase 1: Scripts BD + Frontend cleanup
+2. `9dc5c83` - Fase 2: WorkerPool eliminado
+3. `39cf1d4` - Fase 3: Script SPs V1
+
+### Balance neto:
+- **Total líneas eliminadas:** ~1,356 líneas
+- **Total líneas agregadas:** ~702 líneas (scripts de migración + plan)
+- **Ahorro neto:** ~654 líneas
+- **Objetos BD eliminados:** 24 (23 SPs + 1 tabla)
+- **Cambios funcionales:** 0 (todo era código no utilizado)
+
+---
+
+## PRÓXIMAS ACCIONES RECOMENDADAS
+
+### Fase 5 (Opcional): Análisis de SPs sin V2
+**SPs pendientes de análisis (8 total):**
+- `staging.IPA_Consolidar_MDLAT_MLATHY`
+- `staging.TH_01_Dimensiones`
+- `staging.Tratamiento_RISK_AMERICA`
+- `staging.UAF_01_Dimensiones`
+- `staging.UAF_02_TiposCambio`
+- `staging.UAF_03_Ajuste`
+- `staging.UAF_04_Agrupacion`
+- `staging.Generar_Exposicion_BMS`
+
+**Acción requerida:** Determinar si estos SPs siguen siendo necesarios o deben ser migrados a V2.
+
+**Riesgo:** MEDIO (requiere análisis de negocio y validación con stakeholders)
+
+---
+
+## CONCLUSIONES
+
+✅ **Proyecto exitoso de limpieza de código legacy**
+
+La limpieza eliminó componentes obsoletos de forma segura y verificada:
+- Arquitectura v2 ahora es la única versión activa
+- Código más limpio y mantenible
+- Base de datos sin componentes duplicados V1/V2
+- Documentación actualizada para reflejar arquitectura real
+
+**Sin incidentes:** Todas las verificaciones pasaron, 0 cambios funcionales detectados.
