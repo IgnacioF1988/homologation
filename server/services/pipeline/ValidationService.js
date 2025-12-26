@@ -1,20 +1,41 @@
 /**
- * ValidationService - Validación de Datos Extraídos (POST-EXTRACCIÓN)
+ * ValidationService - Validación global de datos extraídos
  *
- * Responsable de validar datos extraídos GLOBALMENTE (toda la fecha).
- * Identifica fondos activos sin datos y registra problemas críticos.
+ * Valida que fondos activos tengan datos en tablas extract.* según sus flags.
+ * Identifica fondos sin datos y los registra en sandbox.Fondos_Problema para
+ * exclusión automática del procesamiento.
  *
- * Características:
- * - Validación global de IPA, PosModRF, SONA, CAPM, Derivados, UBS
- * - Identificación de fondos activos sin datos (usando flags BD_Funds)
- * - Registro automático en sandbox.Fondos_Problema
- * - Exclusión automática de fondos problemáticos
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados
+ * - logger: LoggingService para registrar eventos
+ * - context: { idEjecucion, fechaReporte } (NO recibe fund, es servicio global)
  *
- * IMPORTANTE: Este servicio se ejecuta POST-EXTRACCIÓN (después de Extract_*)
- * y ANTES de Process_IPA para evitar desperdiciar procesamiento en fondos sin datos.
+ * PROCESA:
+ * 1. Valida fondos activos sin IPA (Incluir_En_Cubo=1)
+ * 2. Valida fondos activos sin PosModRF
+ * 3. Valida fondos activos sin SONA
+ * 4. Valida fondos activos sin CAPM
+ * 5. Valida fondos con Flag_Derivados=1 sin datos Derivados
+ * 6. Valida fondos con Flag_UBS=1 sin datos UBS
+ * 7. Registra cada problema en sandbox.Fondos_Problema
+ * 8. Genera reporte detallado de todos los problemas
  *
- * @author Claude Code - Stand-by System Implementation
- * @date 2025-12-23
+ * ENVIA:
+ * - Problemas a: sandbox.Fondos_Problema (exclusión automática)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ * - Estado a: logs.Ejecucion_Fondos (WARNING si hay problemas, OK si no)
+ *
+ * DEPENDENCIAS:
+ * - Requiere: EXTRACCION completada (extract.* con datos)
+ * - Requerido por: PROCESS_IPA (no procesa fondos sin datos)
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio GLOBAL (no por fondo): valida toda la fecha en una sola ejecución
+ * - Se ejecuta UNA VEZ por proceso, después de que todos los fondos extrajeron
+ * - Consulta extract.* filtrando por FechaReporte (sin ID_Ejecucion en WHERE)
+ * - Fondos detectados NO se procesarán en fases posteriores (IPA, CAPM, etc.)
  */
 
 const sql = require('mssql');
@@ -24,14 +45,26 @@ class ValidationService extends BasePipelineService {
   /**
    * Ejecutar validaciones globales de datos extraídos
    *
-   * Este servicio es BATCH (no por fondo) - valida toda la fecha.
-   * Verifica que fondos activos tengan datos en extract.* según flags.
+   * Servicio GLOBAL (no por fondo): valida toda la fecha en una sola ejecución.
+   * Verifica que fondos activos tengan datos en extract.* según sus flags.
    *
-   * @param {Object} context - Contexto de ejecución
-   * @param {BigInt} context.idEjecucion - ID de la ejecución
-   * @param {String} context.fechaReporte - Fecha a procesar (YYYY-MM-DD)
-   * @param {Object} context.fund - null (batch service)
-   * @returns {Promise<Object>} - { success, problemasDetectados }
+   * @param {Object} context - Contexto de ejecución (viene de: FundOrchestrator)
+   * @param {BigInt} context.idEjecucion - ID de ejecución (para logging, no para filtrar datos)
+   * @param {String} context.fechaReporte - Fecha a validar (YYYY-MM-DD)
+   * @param {Object} context.fund - null (servicio global, no recibe fondo específico)
+   * @returns {Promise<Object>} - { success: true, problemasDetectados: número, detalle?: objeto }
+   *
+   * Flujo:
+   * 1. Ejecuta 6 validaciones en paralelo (IPA, PosModRF, SONA, CAPM, Derivados, UBS)
+   * 2. Cada validación:
+   *    - Consulta logs.Ejecucion_Fondos para fondos activos (Incluir_En_Cubo=1)
+   *    - Verifica existencia de datos en extract.* por Portfolio
+   *    - Registra fondos sin datos en sandbox.Fondos_Problema
+   * 3. Acumula problemas de todas las validaciones
+   * 4. Genera reporte detallado si hay problemas
+   * 5. Retorna WARNING si hay problemas, OK si no
+   *
+   * Nota: Fondos registrados en Fondos_Problema serán omitidos en procesamiento posterior
    */
   async execute(context) {
     const { idEjecucion, fechaReporte } = context;
@@ -127,6 +160,10 @@ class ValidationService extends BasePipelineService {
 
   /**
    * Validar fondos activos sin datos IPA
+   *
+   * Identifica fondos con Incluir_En_Cubo=1 que no tienen datos en extract.IPA
+   * para su Portfolio_Geneva en la fecha especificada.
+   *
    * @private
    */
   async _validateIPA(idEjecucion, fechaReporte) {
@@ -321,7 +358,14 @@ class ValidationService extends BasePipelineService {
   }
 
   /**
-   * Generar reporte detallado de problemas
+   * Generar reporte detallado de problemas detectados
+   *
+   * Formatea los problemas en un reporte legible con estructura:
+   * - Tipo de problema (IPA, CAPM, etc.)
+   * - Lista de fondos afectados con ID y Portfolio
+   * - Total de fondos con problemas
+   * - Acción tomada (registro en Fondos_Problema)
+   *
    * @private
    */
   _generarReporte(problemas) {

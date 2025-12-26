@@ -1,12 +1,43 @@
 /**
- * WebSocketManager.js - Gestor Central de WebSockets
+ * WebSocketManager - Gestor Central de WebSockets (Singleton)
  *
- * Responsabilidades:
- * - Gestionar conexiones WebSocket activas
- * - Mantener Map de suscripciones por ejecución
- * - Emitir eventos a clientes suscritos
- * - Heartbeat (ping/pong)
- * - Auto-cleanup de conexiones muertas
+ * Gestiona conexiones WebSocket para actualizar clientes en tiempo real sobre el estado
+ * de ejecuciones del pipeline (fondos procesándose, estados granulares, errores).
+ *
+ * RECIBE:
+ * - server: Servidor HTTP de Express (para montar WebSocket Server)
+ * - getPoolFn: Función para obtener pool de SQL Server (opcional)
+ * - Mensajes de clientes: SUBSCRIBE, UNSUBSCRIBE, PING, GET_STATUS
+ * - Eventos desde ExecutionTracker: emitFundUpdate(), emitExecutionUpdate()
+ *
+ * PROCESA:
+ * 1. Inicializa WebSocket Server en /api/ws/pipeline
+ * 2. Maneja conexiones entrantes: asigna clientId, registra cliente
+ * 3. Gestiona suscripciones: Map de idEjecucion → Set de clientIds suscritos
+ * 4. Recibe mensajes de clientes: SUBSCRIBE (suscribirse a ejecución), PING (heartbeat)
+ * 5. Emite eventos a clientes suscritos: FUND_UPDATE (cambio estado fondo), EXECUTION_UPDATE (cambio estado ejecución)
+ * 6. Heartbeat: ping cada 30s, desconecta clientes sin pong en 60s
+ * 7. Auto-cleanup: elimina conexiones cerradas y clientes inactivos
+ *
+ * ENVIA:
+ * - Eventos WebSocket a: Clientes conectados (frontend)
+ *   * CONNECTED: al conectarse (incluye clientId)
+ *   * SUBSCRIBED: al suscribirse a ejecución
+ *   * FUND_UPDATE: estado de fondo actualizado (desde ExecutionTracker)
+ *   * EXECUTION_UPDATE: estado de ejecución actualizado (desde ExecutionTracker)
+ *   * PONG: respuesta a PING (heartbeat)
+ *
+ * DEPENDENCIAS:
+ * - Requiere: HTTP Server de Express (para montar WebSocket)
+ * - Requerido por: ExecutionTracker (emite eventos), Frontend (recibe actualizaciones)
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio SINGLETON: una sola instancia global para toda la aplicación
+ * - Thread-safe: Node.js single-threaded (event loop), Map operations son síncronas
+ * - Múltiples clientes: cada conexión tiene su clientId único
+ * - Suscripciones: un cliente puede suscribirse a múltiples ejecuciones
+ * - Broadcasting selectivo: eventos se emiten SOLO a clientes suscritos a esa ejecución
+ * - Heartbeat: ping/pong cada 30s para detectar conexiones muertas
  */
 
 const WebSocket = require('ws');

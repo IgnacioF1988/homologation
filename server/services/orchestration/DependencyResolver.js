@@ -4,18 +4,36 @@
  * Calcula el orden de ejecución correcto de servicios basado en sus dependencias,
  * usando un algoritmo de ordenamiento topológico (Kahn's algorithm).
  *
- * Características:
- * - Detección de dependencias cíclicas
- * - Validación de dependencias inexistentes
- * - Cálculo de orden de ejecución seguro
- * - Verificación de pre-requisitos antes de ejecutar
+ * RECIBE:
+ * - services: Array de configuración de servicios desde pipeline.config.yaml
+ *   Cada servicio tiene: {id, name, dependencies, errorPolicy, conditional, etc.}
  *
- * Uso:
- * ```javascript
- * const resolver = new DependencyResolver(services);
- * const order = resolver.getExecutionOrder(); // ['EXTRACCION', 'VALIDACION', 'PROCESS_IPA', ...]
- * const canRun = resolver.canExecute('PROCESS_CAPM', completedServices);
- * ```
+ * PROCESA:
+ * 1. Construye grafo de dependencias (Map de serviceId → {dependencies, config})
+ * 2. Valida que todas las dependencias existan en la configuración
+ * 3. Calcula orden de ejecución con algoritmo de Kahn (ordenamiento topológico):
+ *    a. Calcula in-degree (número de dependencias) para cada nodo
+ *    b. Agrega a cola los nodos con in-degree 0 (sin dependencias)
+ *    c. Procesa cola: toma nodo, lo agrega al resultado, reduce in-degree de dependientes
+ *    d. Repite hasta que la cola esté vacía
+ *    e. Si quedan nodos sin procesar, detecta ciclo
+ * 4. Detecta dependencias cíclicas (error fatal si existen)
+ * 5. Proporciona métodos para verificar pre-requisitos en runtime
+ *
+ * ENVIA:
+ * - Orden de ejecución a: FundOrchestrator (array de serviceIds ordenado)
+ * - Validaciones a: FundOrchestrator.canExecute() → verifica si servicio puede ejecutarse
+ * - Ready list a: FundOrchestrator.getReadyServices() → lista de servicios ejecutables
+ *
+ * DEPENDENCIAS:
+ * - Requiere: pipeline.config.yaml cargado por FundOrchestrator
+ * - Requerido por: FundOrchestrator (resuelve orden antes de ejecutar servicios)
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio DETERMINÍSTICO: mismo input → mismo output (sin side effects)
+ * - Cada FundOrchestrator crea su propia instancia (no compartida entre fondos)
+ * - Sin estado compartido: cada instancia tiene su propio grafo y cache
+ * - Cache de orden de ejecución: se calcula una vez, se reutiliza para todas las verificaciones
  */
 
 class DependencyResolver {

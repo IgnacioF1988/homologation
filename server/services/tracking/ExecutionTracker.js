@@ -1,23 +1,41 @@
 /**
  * ExecutionTracker - Servicio de Tracking de Ejecuciones
  *
- * Gestiona el estado de las ejecuciones del pipeline en las tablas:
- * - logs.Ejecuciones: Estado general de la ejecución
- * - logs.Ejecucion_Fondos: Estado por fondo individual
+ * Gestiona el estado de las ejecuciones del pipeline en las tablas de logging,
+ * actualizando estados granulares por fondo y servicio en tiempo real.
  *
- * Características:
- * - Actualización atómica de estados
- * - Tracking de métricas (duración, errores)
- * - Soporte para estados granulares por servicio
- * - Manejo de errores con reintentos
+ * RECIBE:
+ * - pool: Pool de conexiones SQL Server (compartido entre todos los orquestadores)
+ * - idEjecucion: ID único de la ejecución del fondo (BigInt)
+ * - idFund: ID del fondo (Int)
+ * - fieldName: Nombre del campo de estado (Estado_Process_IPA, Estado_CAPM_01, etc.)
+ * - value: Valor del estado (PENDIENTE, EN_PROGRESO, OK, ERROR, STAND_BY)
+ * - metadata: Metadata adicional (usuario, errores, métricas, etc.)
  *
- * Uso:
- * ```javascript
- * const tracker = new ExecutionTracker(pool);
- * await tracker.initializeExecution(idEjecucion, fechaReporte, fondos);
- * await tracker.updateFundState(idEjecucion, idFund, 'Estado_Process_IPA', 'EN_PROGRESO');
- * await tracker.markFundCompleted(idEjecucion, idFund);
- * ```
+ * PROCESA:
+ * 1. Inicializa ejecución: crea registro en logs.Ejecuciones + logs.Ejecucion_Fondos
+ * 2. Actualiza estados granulares: Estado_Process_IPA, Estado_IPA_01 hasta Estado_IPA_07, etc.
+ * 3. Actualiza métricas: duración, errores, registros procesados
+ * 4. Marca fondos completados: actualiza Estado_Final y Fin_Procesamiento
+ * 5. Marca ejecución completada: actualiza logs.Ejecuciones con resumen (OK/ERROR/MIXTO)
+ * 6. Notifica vía WebSocket: emite eventos FUND_UPDATE y EXECUTION_UPDATE
+ * 7. Maneja reintentos: retry exponencial (3 intentos) en caso de deadlock
+ *
+ * ENVIA:
+ * - Estados a: logs.Ejecuciones (estado general) + logs.Ejecucion_Fondos (estado por fondo)
+ * - Eventos WebSocket a: WebSocketManager → clientes conectados (actualizaciones tiempo real)
+ * - Confirmación a: Caller (Promise resuelto) → FundOrchestrator, BasePipelineService
+ *
+ * DEPENDENCIAS:
+ * - Requiere: SQL Server pool (compartido), WebSocketManager (singleton)
+ * - Requerido por: FundOrchestrator, BasePipelineService (actualizan estados)
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio COMPARTIDO: una sola instancia usada por todos los FundOrchestrators
+ * - Thread-safe: queries SQL son atómicas (UPDATE WHERE ID_Ejecucion AND ID_Fund)
+ * - Sin contención: cada fondo actualiza su propia fila en logs.Ejecucion_Fondos
+ * - RCSI enabled: lecturas no bloquean escrituras
+ * - WebSocket asíncrono: emite eventos sin bloquear el tracker
  */
 
 const sql = require('mssql');

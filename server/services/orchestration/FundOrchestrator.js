@@ -1,17 +1,52 @@
 /**
- * FundOrchestrator - Orquestador de Ejecución del Pipeline V2
+ * FundOrchestrator - Orquestador de Ejecución del Pipeline para un Fondo
  *
- * Responsable de coordinar la ejecución de todos los servicios del pipeline
- * para múltiples fondos en paralelo, respetando dependencias y políticas de error.
+ * Coordina la ejecución de todos los servicios del pipeline para UN SOLO FONDO,
+ * respetando dependencias y manejando errores según políticas configuradas.
  *
- * Características:
- * - Resolución de dependencias usando Kahn's algorithm
- * - Concurrencia adaptativa (100 fondos si >100, full parallel si <100)
- * - Manejo de políticas de error (STOP_ALL, STOP_FUND, CONTINUE)
- * - Integración con ExecutionTracker y LoggingService
+ * RECIBE:
+ * - idEjecucion: ID único de la ejecución del fondo (BigInt)
+ * - idProceso: ID del proceso padre que agrupa múltiples fondos (BigInt)
+ * - fechaReporte: Fecha a procesar (YYYY-MM-DD)
+ * - fondos: Array con 1 solo fondo [{ID_Fund, Portfolio_Geneva, ...}]
+ * - pool: Pool de conexiones SQL Server (compartido entre orquestadores)
+ * - tracker: ExecutionTracker compartido entre orquestadores
+ * - logger: LoggingService compartido
+ * - trace: TraceService compartido (opcional)
  *
- * @author Claude Code - Pipeline V2 Migration
- * @date 2025-12-22
+ * PROCESA:
+ * 1. Carga pipeline.config.yaml (servicios y dependencias)
+ * 2. Resuelve orden topológico con DependencyResolver (algoritmo de Kahn)
+ * 3. Agrupa servicios por tipo: batch (1 vez), parallel (por fondo), sequential (1 vez)
+ * 4. Instancia servicios: IPAService, CAPMService, PNLService, DerivadosService, UBSService
+ * 5. Ejecuta fases del pipeline:
+ *    - Batch: EXTRACCION, TAGGING, VALIDACION (1 vez por fecha)
+ *    - Parallel: IPA, CAPM, Derivados, PNL, UBS (aislado por fondo)
+ *    - Sequential: CONSOLIDACION, EXPORTACION (1 vez por fecha)
+ * 6. Verifica exclusión automática (sandbox.Fondos_Problema)
+ * 7. Verifica stand-by antes de cada servicio (códigos 5-8)
+ * 8. Maneja errores según política:
+ *    - STOP_ALL: detiene todos los fondos del proceso (deadlock crítico)
+ *    - STOP_FUND: detiene solo este fondo (error de datos)
+ *    - CONTINUE: registra error pero continúa (derivados/UBS opcionales)
+ *
+ * ENVIA:
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos → WebSocket (tiempo real)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ * - Trace records a: TraceService → logs.Trace_Records (análisis de performance)
+ * - Resultado final a: procesos.v2.routes.js → {success, duration, failedFunds}
+ *
+ * DEPENDENCIAS:
+ * - Requiere: pipeline.config.yaml, DependencyResolver, servicios del pipeline
+ * - Requerido por: procesos.v2.routes.js (ejecuta N orquestadores vía WorkerPool)
+ *
+ * CONTEXTO PARALELO:
+ * - Arquitectura jerárquica: 1 Orquestador = 1 Fondo = 1 ID_Ejecucion
+ * - Múltiples orquestadores ejecutan en paralelo (WorkerPool controla concurrencia)
+ * - Cada fondo aislado: propia conexión SQL, propias temp tables (#temp_*_[ID_Ejecucion]_[ID_Fund])
+ * - Sin contención: RCSI habilitado + tablas temporales únicas por fondo
+ * - Validación defensiva: ID_Ejecucion > 0 y ID_Fund > 0 previenen race conditions
+ * - Stand-by per-fund: un fondo en stand-by NO detiene a otros fondos
  */
 
 const yaml = require('js-yaml');

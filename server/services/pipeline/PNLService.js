@@ -1,31 +1,38 @@
 /**
- * PNLService - Servicio de Procesamiento PNL
+ * PNLService - Servicio de procesamiento PNL (Profit & Loss)
  *
- * Ejecuta el pipeline de procesamiento PNL (Profit & Loss) para fondos:
- * 1. PNL_01_Dimensiones - Homologación dimensional de PNL
- * 2. PNL_02_Ajuste - Ajustes específicos de PNL
- * 3. PNL_03_Agrupacion - Agrupación de registros PNL
- * 4. PNL_04_CrearRegistrosAjusteIPA - Crea ajustes contra IPA
- * 5. PNL_05_Consolidar_IPA_PNL - Consolidación final IPA + PNL
+ * Ejecuta el pipeline de 5 pasos secuenciales para procesar Profit & Loss (Ganancia/Pérdida).
+ * El paso final consolida IPA + PNL en una tabla unificada.
  *
- * Características:
- * - Procesa un fondo individual a la vez
- * - Depende de IPA (requiere staging.IPA_WorkTable)
- * - Usa tablas temporales: #temp_PNL_*
- * - Tracking granular por sub-paso (Estado_PNL_01, Estado_PNL_02, etc.)
- * - Retry automático en errores recuperables
- * - Logging detallado de cada paso
- * - Consolidación con IPA en el paso 05
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml (5 SPs secuenciales)
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados
+ * - logger: LoggingService para registrar eventos
+ * - trace: TraceService (opcional)
+ * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
  *
- * Uso:
- * ```javascript
- * const pnlService = new PNLService(serviceConfig, pool, tracker, logger);
- * const result = await pnlService.execute({
- *   idEjecucion: 12345n,
- *   fechaReporte: '2025-12-19',
- *   fund: { ID_Fund: 789, FundShortName: 'MLAT', Portfolio_Geneva: 'MLAT' }
- * });
- * ```
+ * PROCESA (5 pasos secuenciales):
+ * 1. PNL_01_Dimensiones_v2: Crea dimensiones de P&L
+ * 2. PNL_02_Ajuste_v2: Aplica ajustes contables
+ * 3. PNL_03_Agrupacion_v2: Agrupa registros por dimensión
+ * 4. PNL_04_CrearRegistrosAjusteIPA_v2: Crea registros de ajuste entre IPA y PNL
+ * 5. PNL_05_Consolidar_IPA_PNL_v2: Consolida IPA + PNL en tabla final
+ *
+ * ENVIA:
+ * - Datos a: staging.PNL_IPA (tabla consolidada IPA + PNL)
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_PNL_01 hasta Estado_PNL_05)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ *
+ * DEPENDENCIAS:
+ * - Requiere: PROCESS_IPA completado (usa staging.IPA_Final)
+ * - Requerido por: CONCATENAR (concatena PNL de todos los fondos)
+ *
+ * CONTEXTO PARALELO:
+ * - Procesa 1 fondo a la vez de forma aislada
+ * - Usa tablas temporales: #temp_PNL_WorkTable_[ID_Ejecucion]_[ID_Fund]
+ * - Los 5 pasos se ejecutan secuencialmente en una transacción
+ * - PNL_05 consolida staging.IPA_Final + staging.PNL en staging.PNL_IPA
  */
 
 const BasePipelineService = require('./BasePipelineService');

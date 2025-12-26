@@ -1,34 +1,38 @@
 /**
- * UBSService - Servicio de Procesamiento UBS
+ * UBSService - Servicio de procesamiento UBS/Fondos Luxemburgo
  *
- * Ejecuta el pipeline de procesamiento UBS (Fondos Luxemburgo):
- * 1. UBS_01_Tratamiento_Fondos_Luxemburgo - Extrae y trata datos UBS
- * 2. UBS_02_Tratamiento_Derivados_MLCCII - Derivados MLCCII (condicional)
- * 3. UBS_03_Creacion_Cartera_MLCCII - Crea cartera MLCCII (condicional)
+ * Ejecuta el pipeline de hasta 3 pasos para procesar fondos UBS de Luxemburgo.
+ * INDEPENDIENTE: No requiere IPA, solo extracción UBS. Solo se ejecuta si Flag_UBS = 1.
  *
- * Características:
- * - INDEPENDIENTE de IPA (solo requiere extracción)
- * - Procesa un fondo individual a la vez
- * - UBS_02 y UBS_03 solo ejecutan si Es_MLCCII = true
- * - Usa tablas temporales: #temp_UBS_*
- * - Tracking granular por sub-paso
- * - onError: CONTINUE (no detiene pipeline si falla)
- * - Logging detallado de cada paso
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml (3 SPs, 2 condicionales)
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados
+ * - logger: LoggingService para registrar eventos
+ * - trace: TraceService (opcional)
+ * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
  *
- * Uso:
- * ```javascript
- * const ubsService = new UBSService(serviceConfig, pool, tracker, logger);
- * const result = await ubsService.execute({
- *   idEjecucion: 12345n,
- *   fechaReporte: '2025-12-19',
- *   fund: {
- *     ID_Fund: 789,
- *     FundShortName: 'MLCCII',
- *     Portfolio_UBS: 'MLCCII_LUX',
- *     Es_MLCCII: true
- *   }
- * });
- * ```
+ * PROCESA (hasta 3 pasos, solo si Flag_UBS=1):
+ * 1. UBS_01_Tratamiento_Fondos_Luxemburgo_v2: Procesa fondos UBS Luxemburgo (siempre)
+ * 2. UBS_02_Tratamiento_Derivados_MLCCII_v2: Derivados MLCCII (solo si Es_MLCCII=true)
+ * 3. UBS_03_Creacion_Cartera_MLCCII_v2: Cartera MLCCII (solo si Es_MLCCII=true)
+ *
+ * ENVIA:
+ * - Datos a: staging.UBS_Final (tabla temporal)
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_UBS_01 hasta Estado_UBS_03)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ *
+ * DEPENDENCIAS:
+ * - Requiere: EXTRACCION completada (extract.UBS con datos)
+ * - NO requiere: IPA (procesamiento independiente)
+ * - Requerido por: CONCATENAR (concatena UBS si Flag_UBS=1)
+ *
+ * CONTEXTO PARALELO:
+ * - CONDICIONAL: Solo ejecuta si fund.Flag_UBS = 1
+ * - INDEPENDIENTE: NO depende de IPA, puede ejecutarse en paralelo con IPA/CAPM/PNL
+ * - Política de error: CONTINUE (errores NO detienen pipeline completo)
+ * - Pasos 2 y 3: Solo ejecutan si fund.Es_MLCCII = true (sub-condicional)
+ * - Usa tablas temporales: #temp_UBS_WorkTable_[ID_Ejecucion]_[ID_Fund]
  */
 
 const BasePipelineService = require('./BasePipelineService');

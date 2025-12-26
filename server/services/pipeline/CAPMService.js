@@ -1,27 +1,35 @@
 /**
- * CAPMService - Servicio de Procesamiento CAPM
+ * CAPMService - Servicio de procesamiento CAPM (Cash Appraisal Model)
  *
- * Ejecuta el pipeline CAPM para un fondo específico:
- * 1. CAPM_01_Ajuste_CAPM - Calcula ajuste entre IPA_Cash y CAPM
- * 2. CAPM_02_Extract_Transform - Extrae y homologa datos CAPM
+ * Ejecuta el pipeline de 2 pasos secuenciales para procesar datos CAPM.
+ * CAPM valida el efectivo (cash) del fondo calculando diferencias entre IPA y registros CAPM.
  *
- * Características:
- * - Procesa un fondo individual a la vez
- * - Depende de IPA (necesita #temp_IPA_Cash_[ID_Ejecucion]_[ID_Fund])
- * - Usa tablas temporales: #temp_Ajuste_CAPM_* y #temp_CAPM_WorkTable_*
- * - Tracking granular por sub-paso (Estado_CAPM_01, Estado_CAPM_02)
- * - Retry automático en errores recuperables
- * - Logging detallado de cada paso
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml (2 SPs secuenciales)
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados
+ * - logger: LoggingService para registrar eventos
+ * - trace: TraceService (opcional)
+ * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
  *
- * Uso:
- * ```javascript
- * const capmService = new CAPMService(serviceConfig, pool, tracker, logger);
- * const result = await capmService.execute({
- *   idEjecucion: 12345n,
- *   fechaReporte: '2025-12-19',
- *   fund: { ID_Fund: 789, FundShortName: 'MLAT', Portfolio_Geneva: 'MLAT' }
- * });
- * ```
+ * PROCESA (2 pasos secuenciales):
+ * 1. CAPM_01_Ajuste_CAPM_v2: Calcula ajuste entre IPA_Cash y datos CAPM
+ * 2. CAPM_02_Extract_Transform_v2: Extrae y transforma datos CAPM homologados
+ *
+ * ENVIA:
+ * - Datos a: staging.CAPM_Final (tabla temporal) → process.TBL_CAPM (consolidado)
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_CAPM_01, Estado_CAPM_02)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ *
+ * DEPENDENCIAS:
+ * - Requiere: PROCESS_IPA completado (#temp_IPA_Cash disponible como tabla temporal)
+ * - Requerido por: CONSOLIDAR_CAPM (consolida CAPM de todos los fondos)
+ *
+ * CONTEXTO PARALELO:
+ * - Procesa 1 fondo a la vez de forma aislada
+ * - Usa tablas temporales: #temp_Ajuste_CAPM_[ID_Ejecucion]_[ID_Fund], #temp_CAPM_WorkTable_[ID_Ejecucion]_[ID_Fund]
+ * - Los 2 pasos se ejecutan secuencialmente en una transacción
+ * - Depende de temp tables de IPA (#temp_IPA_Cash) de la misma transacción
  */
 
 const BasePipelineService = require('./BasePipelineService');

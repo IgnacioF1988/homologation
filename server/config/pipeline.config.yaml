@@ -23,13 +23,13 @@ global:
 # ============================================
 services:
   # ============================================
-  # FASE 0: EXTRACCION (Batch completo por fecha)
+  # FASE 0: EXTRACCION (Parallel per-fund)
   # ============================================
   - id: EXTRACCION
     name: "Extracción de Datos"
-    type: batch                      # Ejecuta toda la fecha (no por fondo individual)
+    type: parallel                   # Ejecuta por fondo individual (per-fund isolation)
     dependencies: []                 # Sin dependencias previas (primer paso)
-    maxConcurrent: 1                 # Solo 1 extracción a la vez (procesa toda la fecha)
+    maxConcurrent: 50                # Hasta 50 fondos extrayendo en paralelo
     spList:
       - name: extract.Extract_IPA
         order: 1

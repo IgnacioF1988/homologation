@@ -1,19 +1,47 @@
 const sql = require('mssql');
 
 /**
- * TraceService - Buffered trace recording for execution flow analysis
+ * TraceService - Servicio de Trazabilidad de Ejecución (Phase 3)
  *
- * Purpose: Record detailed execution events for:
- * - Resource contention detection
- * - Performance bottleneck identification
- * - Execution flow visualization
- * - Debugging concurrent fund processing
+ * Registra eventos detallados de ejecución del pipeline para análisis de flujo,
+ * detección de contención de recursos, y optimización de performance.
  *
- * Features:
- * - Buffered writes for performance (bulk insert when buffer reaches threshold)
- * - Automatic flush on orchestrator completion
- * - Thread-safe recording
- * - Multiple event types: START, END, LOCK, WAIT, ERROR
+ * RECIBE:
+ * - pool: Pool de conexiones SQL Server (compartido entre todos los orquestadores)
+ * - bufferSize: Tamaño del buffer para bulk insert (default: 100 eventos)
+ * - idProceso: ID del proceso padre (BigInt)
+ * - idEjecucion: ID único de la ejecución del fondo (BigInt)
+ * - idFund: ID del fondo (Int)
+ * - etapa: Nombre del servicio (IPA, CAPM, PNL, etc.)
+ * - subEtapa: Sub-paso del servicio (IPA_01, IPA_02, etc., opcional)
+ * - recurso: Nombre del recurso (tabla, SP, etc.)
+ * - duracionMs: Duración del evento en milisegundos
+ * - metadata: Metadata adicional (portfolio, registros procesados, etc.)
+ *
+ * PROCESA:
+ * 1. Registra eventos de ejecución: START, END, LOCK, WAIT, ERROR
+ * 2. Agrega eventos al buffer en memoria (batch de 100 por defecto)
+ * 3. Flush automático: cuando buffer alcanza bufferSize
+ * 4. Bulk insert: inserta todos los eventos del buffer en una sola operación
+ * 5. Calcula duración: END - START para cada servicio
+ * 6. Captura Thread_ID: process.pid para análisis de concurrencia
+ * 7. Cleanup: al finalizar orquestador, ejecuta flush final
+ *
+ * ENVIA:
+ * - Trace records a: logs.Trace_Records (tabla de trazabilidad)
+ * - Confirmación a: Caller (Promise resuelto) → FundOrchestrator, BasePipelineService
+ *
+ * DEPENDENCIAS:
+ * - Requiere: SQL Server pool (compartido)
+ * - Requerido por: FundOrchestrator (opcional, Phase 3)
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio COMPARTIDO: una sola instancia usada por todos los FundOrchestrators
+ * - Thread-safe: buffer en memoria se serializa al escribir a BD
+ * - Bulk insert: optimización para alta concurrencia (100 eventos por batch)
+ * - Uso: análisis post-ejecución de flujo, contención, y performance
+ * - Eventos: START (inicio servicio), END (fin servicio), LOCK (bloqueo recurso),
+ *            WAIT (espera), ERROR (fallo)
  */
 class TraceService {
   constructor(pool, bufferSize = 100) {
@@ -24,13 +52,13 @@ class TraceService {
   }
 
   /**
-   * Record service start event
-   * @param {number} idProceso - Process ID
-   * @param {number} idEjecucion - Execution ID
-   * @param {number} idFund - Fund ID
-   * @param {string} etapa - Service name (e.g., 'IPA', 'CAPM')
-   * @param {string} recurso - Resource name (e.g., 'staging.IPA_WorkTable')
-   * @param {object} metadata - Additional context (portfolio, etc.)
+   * Registrar evento de inicio de servicio
+   * @param {number} idProceso - ID del proceso
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {number} idFund - ID del fondo
+   * @param {string} etapa - Nombre del servicio (ej: 'IPA', 'CAPM')
+   * @param {string} recurso - Nombre del recurso (ej: 'staging.IPA_WorkTable')
+   * @param {object} metadata - Contexto adicional (portfolio, etc.)
    */
   async recordStart(idProceso, idEjecucion, idFund, etapa, recurso, metadata = {}) {
     return this._record({
@@ -48,14 +76,14 @@ class TraceService {
   }
 
   /**
-   * Record service end event
-   * @param {number} idProceso - Process ID
-   * @param {number} idEjecucion - Execution ID
-   * @param {number} idFund - Fund ID
-   * @param {string} etapa - Service name
-   * @param {string} recurso - Resource name
-   * @param {number} duracionMs - Execution duration in milliseconds
-   * @param {object} metadata - Additional context (rows affected, etc.)
+   * Registrar evento de fin de servicio
+   * @param {number} idProceso - ID del proceso
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {number} idFund - ID del fondo
+   * @param {string} etapa - Nombre del servicio
+   * @param {string} recurso - Nombre del recurso
+   * @param {number} duracionMs - Duración de ejecución en milisegundos
+   * @param {object} metadata - Contexto adicional (registros afectados, etc.)
    */
   async recordEnd(idProceso, idEjecucion, idFund, etapa, recurso, duracionMs, metadata = {}) {
     return this._record({
@@ -73,12 +101,12 @@ class TraceService {
   }
 
   /**
-   * Record lock/wait event
-   * @param {number} idProceso - Process ID
-   * @param {number} idEjecucion - Execution ID
-   * @param {number} idFund - Fund ID
-   * @param {string} recurso - Resource that caused lock
-   * @param {object} metadata - Lock details
+   * Registrar evento de bloqueo/espera
+   * @param {number} idProceso - ID del proceso
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {number} idFund - ID del fondo
+   * @param {string} recurso - Recurso que causó el bloqueo
+   * @param {object} metadata - Detalles del bloqueo
    */
   async recordLock(idProceso, idEjecucion, idFund, recurso, metadata = {}) {
     return this._record({
@@ -96,13 +124,13 @@ class TraceService {
   }
 
   /**
-   * Record error event
-   * @param {number} idProceso - Process ID
-   * @param {number} idEjecucion - Execution ID
-   * @param {number} idFund - Fund ID
-   * @param {string} etapa - Service name where error occurred
-   * @param {string} errorMessage - Error message
-   * @param {object} metadata - Additional error context
+   * Registrar evento de error
+   * @param {number} idProceso - ID del proceso
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {number} idFund - ID del fondo
+   * @param {string} etapa - Nombre del servicio donde ocurrió el error
+   * @param {string} errorMessage - Mensaje de error
+   * @param {object} metadata - Contexto adicional del error
    */
   async recordError(idProceso, idEjecucion, idFund, etapa, errorMessage, metadata = {}) {
     return this._record({
@@ -120,13 +148,13 @@ class TraceService {
   }
 
   /**
-   * Record wait event (e.g., waiting for connection pool)
-   * @param {number} idProceso - Process ID
-   * @param {number} idEjecucion - Execution ID
-   * @param {number} idFund - Fund ID
-   * @param {string} recurso - Resource being waited on
-   * @param {number} waitMs - Wait duration
-   * @param {object} metadata - Additional context
+   * Registrar evento de espera (ej: esperando por pool de conexiones)
+   * @param {number} idProceso - ID del proceso
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {number} idFund - ID del fondo
+   * @param {string} recurso - Recurso por el que se está esperando
+   * @param {number} waitMs - Duración de la espera
+   * @param {object} metadata - Contexto adicional
    */
   async recordWait(idProceso, idEjecucion, idFund, recurso, waitMs, metadata = {}) {
     return this._record({
@@ -144,21 +172,21 @@ class TraceService {
   }
 
   /**
-   * Internal method to add record to buffer
+   * Método interno para agregar registro al buffer
    * @private
    */
   async _record(traceRecord) {
     this.buffer.push(traceRecord);
 
-    // Auto-flush when buffer reaches threshold
+    // Auto-flush cuando el buffer alcanza el umbral
     if (this.buffer.length >= this.bufferSize) {
       await this.flush();
     }
   }
 
   /**
-   * Flush all buffered records to database
-   * Uses bulk insert for performance
+   * Escribir todos los registros del buffer a la base de datos
+   * Usa bulk insert para mejor performance
    */
   async flush() {
     if (this.buffer.length === 0 || this.flushInProgress) {
@@ -198,10 +226,10 @@ class TraceService {
       });
 
       await this.pool.request().bulk(table);
-      console.log(`[TraceService] Flushed ${recordsToFlush.length} trace records to database`);
+      console.log(`[TraceService] Se escribieron ${recordsToFlush.length} registros de trace a la base de datos`);
     } catch (error) {
-      console.error('[TraceService] Error flushing trace records:', error);
-      // Re-add failed records to buffer for retry
+      console.error('[TraceService] Error escribiendo registros de trace:', error);
+      // Re-agregar registros fallidos al buffer para reintentar
       this.buffer.unshift(...recordsToFlush);
     } finally {
       this.flushInProgress = false;
@@ -209,14 +237,14 @@ class TraceService {
   }
 
   /**
-   * Get buffer size for monitoring
+   * Obtener tamaño del buffer para monitoreo
    */
   getBufferSize() {
     return this.buffer.length;
   }
 
   /**
-   * Clear buffer without flushing (use with caution)
+   * Limpiar buffer sin escribir a BD (usar con precaución)
    */
   clearBuffer() {
     this.buffer = [];

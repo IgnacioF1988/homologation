@@ -2,21 +2,42 @@
  * LoggingService - Servicio de Logging Estructurado para Pipeline
  *
  * Gestiona el registro de eventos del pipeline en la tabla logs.Ejecucion_Logs
- * con soporte para bulk insert y niveles de logging configurables.
+ * con soporte para bulk insert automático y niveles de logging configurables.
  *
- * Características:
- * - Niveles de logging: DEBUG, INFO, WARNING, ERROR
- * - Bulk insert automático (batch de 100 logs)
- * - Flush automático cada 5 segundos
- * - Logging a consola opcional
- * - Metadata contextual (etapa, fondo, servicio)
+ * RECIBE:
+ * - pool: Pool de conexiones SQL Server (compartido entre todos los orquestadores)
+ * - level: Nivel mínimo de logging ('DEBUG', 'INFO', 'WARNING', 'ERROR')
+ * - idEjecucion: ID único de la ejecución del fondo (BigInt)
+ * - idFund: ID del fondo (Int, null si es log general)
+ * - nivel: Nivel del log individual ('DEBUG', 'INFO', 'WARNING', 'ERROR')
+ * - etapa: Etapa del pipeline (PROCESS_IPA, EXTRACCION, etc.)
+ * - mensaje: Mensaje descriptivo del evento
+ * - metadata: Metadata adicional opcional (stacktrace, métricas, etc.)
  *
- * Uso:
- * ```javascript
- * const logger = new LoggingService(pool, 'INFO');
- * await logger.log(idEjecucion, idFund, 'INFO', 'PROCESS_IPA', 'Iniciando procesamiento...');
- * await logger.flush(); // Forzar escritura de logs pendientes
- * ```
+ * PROCESA:
+ * 1. Valida nivel: descarta logs de nivel inferior al configurado
+ * 2. Trunca mensajes: máximo 1000 caracteres para evitar overflow en BD
+ * 3. Agrega a buffer: acumula logs en memoria (batch de 100 por defecto)
+ * 4. Flush automático: cada 5 segundos o al alcanzar 100 logs
+ * 5. Bulk insert: inserta todos los logs del batch en una sola operación SQL
+ * 6. Log a consola: opcionalmente imprime logs en stdout (default: true)
+ * 7. Cleanup: al finalizar, detiene auto-flush y escribe logs pendientes
+ *
+ * ENVIA:
+ * - Logs a: logs.Ejecucion_Logs (tabla de logging del pipeline)
+ * - Console output a: stdout (si logToConsole = true)
+ * - Confirmación a: Caller (Promise resuelto) → FundOrchestrator, BasePipelineService
+ *
+ * DEPENDENCIAS:
+ * - Requiere: SQL Server pool (compartido)
+ * - Requerido por: FundOrchestrator, BasePipelineService, todos los servicios del pipeline
+ *
+ * CONTEXTO PARALELO:
+ * - Servicio COMPARTIDO: una sola instancia usada por todos los FundOrchestrators
+ * - Thread-safe: buffer en memoria se serializa al escribir a BD
+ * - Bulk insert: optimización para alta concurrencia (100 logs por batch)
+ * - Auto-flush: previene pérdida de logs si el proceso termina inesperadamente
+ * - Sin contención: logs de diferentes fondos se insertan en la misma tabla sin conflicto
  */
 
 const sql = require('mssql');

@@ -1,35 +1,38 @@
 /**
- * DerivadosService - Servicio de Procesamiento Derivados
+ * DerivadosService - Servicio de procesamiento de Derivados
  *
- * Ejecuta el pipeline de procesamiento de derivados para fondos específicos:
- * 1. DERIV_01_Tratamiento_Posiciones_Larga_Corta - Extrae posiciones de derivados
- * 2. DERIV_02_Homologar_Dimensiones - Homologa dimensiones
- * 3. DERIV_03_Ajuste_Derivados - Ajustes específicos de derivados
- * 4. DERIV_04_Parity_Adjust - Ajuste de paridad
+ * Ejecuta el pipeline de 4 pasos secuenciales para procesar derivados financieros.
+ * Solo se ejecuta para fondos con Flag_Derivados = 1.
  *
- * Características:
- * - Solo ejecuta para fondos con Requiere_Derivados = true
- * - Procesa un fondo individual a la vez
- * - Depende de IPA (necesita staging.IPA_WorkTable)
- * - Usa tablas temporales: #temp_Derivados_*
- * - Tracking granular por sub-paso
- * - onError: CONTINUE (no detiene pipeline si falla)
- * - Logging detallado de cada paso
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml (4 SPs, condicional: Flag_Derivados)
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados
+ * - logger: LoggingService para registrar eventos
+ * - trace: TraceService (opcional)
+ * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
  *
- * Uso:
- * ```javascript
- * const derivadosService = new DerivadosService(serviceConfig, pool, tracker, logger);
- * const result = await derivadosService.execute({
- *   idEjecucion: 12345n,
- *   fechaReporte: '2025-12-19',
- *   fund: {
- *     ID_Fund: 789,
- *     FundShortName: 'MLAT',
- *     Portfolio_Derivados: 'MLAT_DERIV',
- *     Requiere_Derivados: true
- *   }
- * });
- * ```
+ * PROCESA (4 pasos secuenciales, solo si Flag_Derivados=1):
+ * 1. DERIV_01_Tratamiento_Posiciones_Larga_Corta_v2: Clasifica posiciones largas/cortas
+ * 2. DERIV_02_Homologar_Dimensiones_v2: Homologa dimensiones de instrumentos derivados
+ * 3. DERIV_03_Ajuste_Derivados_v2: Aplica ajustes contables
+ * 4. DERIV_04_Parity_Adjust_v2: Ajusta paridades de moneda
+ *
+ * ENVIA:
+ * - Datos a: staging.Derivados_Final (tabla temporal)
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_DERIV_01 hasta Estado_DERIV_04)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ *
+ * DEPENDENCIAS:
+ * - Requiere: PROCESS_IPA completado (usa staging.IPA_Final)
+ * - Requerido por: Ninguno (proceso independiente, no bloquea otros)
+ *
+ * CONTEXTO PARALELO:
+ * - CONDICIONAL: Solo ejecuta si fund.Flag_Derivados = 1 (verificado en BasePipelineService)
+ * - Política de error: CONTINUE (errores NO detienen pipeline completo)
+ * - Procesa 1 fondo a la vez de forma aislada
+ * - Usa tablas temporales: #temp_Derivados_WorkTable_[ID_Ejecucion]_[ID_Fund]
+ * - Si falla, el fondo marca Estado_Process_Derivados = ERROR pero continúa IPA/CAPM/PNL
  */
 
 const BasePipelineService = require('./BasePipelineService');

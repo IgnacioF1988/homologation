@@ -1,24 +1,41 @@
 /**
- * BasePipelineService - Clase Base para Servicios del Pipeline
+ * BasePipelineService - Clase base para todos los servicios del pipeline
  *
- * Proporciona funcionalidad común para todos los servicios del pipeline:
- * - Ejecución de SPs con manejo de errores
- * - Logging estructurado
- * - Validaciones
- * - Tracking de estado
- * - Retry logic con exponential backoff
+ * Proporciona funcionalidad común para ejecutar stored procedures con
+ * manejo de errores, retry automático, validación defensiva y tracking de estado.
+ * Servicios específicos (IPAService, CAPMService, etc.) heredan de esta clase.
  *
- * Servicios específicos (IPAService, CAPMService, etc.) heredan de esta clase
- * y pueden sobrescribir métodos según necesidad.
+ * RECIBE:
+ * - serviceConfig: Configuración del servicio desde pipeline.config.yaml (id, nombre, SPs, dependencias)
+ * - pool: Pool de conexiones a SQL Server (compartido entre todos los orquestadores)
+ * - tracker: ExecutionTracker para actualizar estados en logs.Ejecucion_Fondos
+ * - logger: LoggingService para registrar eventos en logs.Ejecucion_Logs
+ * - trace: TraceService para trazabilidad detallada (opcional, Phase 3)
  *
- * Uso:
- * ```javascript
- * class IPAService extends BasePipelineService {
- *   async execute(context) {
- *     // Lógica específica de IPA
- *   }
- * }
- * ```
+ * PROCESA:
+ * 1. Valida parámetros de entrada (ID_Ejecucion > 0, ID_Fund > 0) para prevenir race conditions
+ * 2. Ejecuta stored procedures en transacción (mantiene tablas temporales entre SPs)
+ * 3. Maneja errores con retry exponencial (deadlock/timeout: 5s, 10s, 15s)
+ * 4. Valida XACT_STATE después de cada SP para detectar transacciones uncommittable
+ * 5. Actualiza estados en BD (PENDIENTE → EN_PROGRESO → OK/ERROR/STAND_BY)
+ * 6. Registra problemas críticos en sandbox.Fondos_Problema
+ * 7. Maneja códigos de stand-by (5-8: SUCIEDADES, HOMOLOGACION, DESCUADRES)
+ *
+ * ENVIA:
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos → WebSocket (tiempo real)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs (bulk insert)
+ * - Trace records a: TraceService → logs.Trace_Records (análisis de performance)
+ * - Problemas a: sandbox.Fondos_Problema (exclusión automática)
+ *
+ * DEPENDENCIAS:
+ * - No tiene dependencias de otros servicios (es la base)
+ * - Requerido por: todos los servicios del pipeline (IPA, CAPM, Derivados, PNL, UBS)
+ *
+ * CONTEXTO PARALELO:
+ * - Cada instancia procesa 1 fondo de forma aislada
+ * - Usa transacciones SQL para mantener temp tables entre SPs del mismo fondo
+ * - Validación defensiva previene race conditions (ID_Ejecucion/ID_Fund > 0)
+ * - Sin contención: cada fondo tiene su propia conexión y temp tables nombradas con ID_Ejecucion_ID_Fund
  */
 
 const sql = require('mssql');
@@ -45,12 +62,18 @@ class StandByRequiredError extends Error {
 
 class BasePipelineService {
   /**
-   * Constructor
+   * Constructor del servicio base
+   *
    * @param {Object} serviceConfig - Configuración del servicio desde pipeline.config.yaml
-   * @param {Object} pool - Connection pool de SQL Server
-   * @param {Object} tracker - ExecutionTracker para actualizar estados
-   * @param {Object} logger - LoggingService para registrar eventos
-   * @param {Object} trace - TraceService para trazabilidad (opcional)
+   * @param {Object} pool - Pool de conexiones de SQL Server (compartido entre orquestadores)
+   * @param {Object} tracker - ExecutionTracker para actualizar estados en logs.Ejecucion_Fondos
+   * @param {Object} logger - LoggingService para registrar eventos en logs.Ejecucion_Logs
+   * @param {Object} trace - TraceService para trazabilidad detallada (opcional)
+   *
+   * Flujo:
+   * 1. Valida que serviceConfig tenga un ID
+   * 2. Almacena referencias a pool, tracker, logger, trace (compartidos)
+   * 3. Extrae configuración (id, nombre)
    */
   constructor(serviceConfig, pool, tracker, logger, trace = null) {
     if (!serviceConfig || !serviceConfig.id) {
@@ -69,23 +92,37 @@ class BasePipelineService {
   /**
    * Ejecutar el servicio para un fondo específico
    *
-   * Template method pattern: Este método coordina el flujo general.
-   * Servicios específicos pueden sobrescribir para custom logic.
+   * Template method pattern: coordina el flujo general de ejecución.
+   * Servicios específicos (IPA, CAPM, etc.) pueden sobrescribir para lógica personalizada.
    *
-   * @param {Object} context - Contexto de ejecución
-   * @param {BigInt} context.idEjecucion - ID de la ejecución
+   * @param {Object} context - Contexto de ejecución (viene de: FundOrchestrator)
+   * @param {BigInt} context.idEjecucion - ID único de la ejecución del fondo
+   * @param {BigInt} context.idProceso - ID del proceso padre que agrupa fondos
    * @param {String} context.fechaReporte - Fecha a procesar (YYYY-MM-DD)
-   * @param {Object} context.fund - Información del fondo
+   * @param {Object} context.fund - Información del fondo desde logs.Ejecucion_Fondos
    * @param {Number} context.fund.ID_Fund - ID numérico del fondo
    * @param {String} context.fund.FundShortName - Nombre corto del fondo
-   * @param {String} context.fund.Portfolio_Geneva - Portfolio code (puede variar por fuente)
-   * @returns {Promise<Object>} - { success, duration, metrics, skipped }
+   * @param {String} context.fund.Portfolio_Geneva - Código de portfolio
+   * @returns {Promise<Object>} - { success: true/false, duration: ms, skipped?: boolean, error?: Error }
+   *
+   * Flujo:
+   * 1. Registra inicio en TraceService (si está habilitado)
+   * 2. Verifica condición de ejecución (ej: Flag_UBS, Flag_Derivados)
+   * 3. Actualiza estado a EN_PROGRESO en logs.Ejecucion_Fondos
+   * 4. Crea transacción SQL (mantiene temp tables entre SPs)
+   * 5. Ejecuta lista de SPs en orden secuencial (config.spList)
+   * 6. Valida XACT_STATE después de cada SP
+   * 7. Hace commit de transacción si todo OK
+   * 8. Actualiza estado final (OK/ERROR) y emite por WebSocket
+   * 9. Registra fin en TraceService
+   *
+   * Nota: Stand-by (códigos 5-8) lanza StandByRequiredError (NO es error real)
    */
   async execute(context) {
     const { idEjecucion, idProceso, fechaReporte, fund } = context;
     const startTime = Date.now();
 
-    // TRACE: Record service start
+    // Registrar inicio del servicio en trace (si está habilitado)
     if (this.trace) {
       await this.trace.recordStart(
         idProceso,
@@ -107,7 +144,7 @@ class BasePipelineService {
         await this.logInfo(idEjecucion, fund.ID_Fund, `Servicio omitido (condicional: ${this.config.conditional})`);
         await this.updateState(idEjecucion, fund.ID_Fund, 'N/A');
 
-        // TRACE: Record skipped end
+        // Registrar fin de servicio omitido en trace
         if (this.trace) {
           await this.trace.recordEnd(
             idProceso,
@@ -151,12 +188,12 @@ class BasePipelineService {
         await this.logError(idEjecucion, fund.ID_Fund,
           `Transacción uncommittable detectada (XACT_STATE = -1). Ejecutando rollback...`);
 
-        // NUEVO: Registrar en Fondos_Problema
+        // Registrar problema en sandbox.Fondos_Problema
         await this.registerFundProblem(
           idEjecucion,
           fund.ID_Fund,
           this.id,
-          'Uncommittable transaction detected (XACT_STATE=-1) - possible constraint violation or trigger error'
+          'Transacción uncommittable detectada (XACT_STATE=-1) - posible violación de constraint o error en trigger'
         );
 
         await transaction.rollback();
@@ -175,7 +212,7 @@ class BasePipelineService {
       await this.updateState(idEjecucion, fund.ID_Fund, 'OK');
       await this.logInfo(idEjecucion, fund.ID_Fund, `${this.name} completado en ${duration}ms`);
 
-      // TRACE: Record successful end
+      // Registrar fin exitoso del servicio en trace
       if (this.trace) {
         await this.trace.recordEnd(
           idProceso,
@@ -202,7 +239,7 @@ class BasePipelineService {
         }
       }
 
-      // TRACE: Record error
+      // Registrar error en trace para análisis
       if (this.trace) {
         await this.trace.recordError(
           idProceso,
@@ -220,12 +257,23 @@ class BasePipelineService {
   }
 
   /**
-   * Ejecutar un stored procedure específico
+   * Ejecutar un stored procedure específico dentro de una transacción
    *
    * @param {Object} spConfig - Configuración del SP desde pipeline.config.yaml
    * @param {Object} context - Contexto de ejecución
-   * @param {Object} transaction - Transacción de SQL Server (para mantener temp tables)
-   * @returns {Promise<Object>} - Resultado del SP
+   * @param {Object} transaction - Transacción SQL activa (mantiene temp tables entre SPs)
+   * @returns {Promise<Object>} - Resultado del SP (returnValue, output, recordset)
+   *
+   * Flujo:
+   * 1. Valida ID_Ejecucion > 0 e ID_Fund > 0 (previene race conditions)
+   * 2. Normaliza fechaReporte a string YYYY-MM-DD (evita errores de validación)
+   * 3. Construye request con parámetros: ID_Ejecucion, FechaReporte, ID_Fund, Portfolio_*
+   * 4. Ejecuta SP con retry automático (deadlock/timeout: 3 intentos, 5s-10s-15s)
+   * 5. Valida XACT_STATE inmediatamente después (detecta SP que causó uncommittable)
+   * 6. Procesa returnValue (0=OK, 2=retry, 3=error, 5-8=stand-by)
+   * 7. Actualiza sub-estado si aplica (ej: Estado_IPA_01)
+   *
+   * Nota: Lanza StandByRequiredError si returnValue 5-8 (pausa válida, no error)
    * @private
    */
   async executeSP(spConfig, context, transaction) {
@@ -233,12 +281,12 @@ class BasePipelineService {
     const spName = spConfig.name;
 
     // ============================================
-    // VALIDACIÓN DEFENSIVA (NUEVO - 2025-12-23)
+    // VALIDACIÓN DEFENSIVA
     // ============================================
     // Validar que ID_Ejecucion e ID_Fund sean valores válidos (> 0)
     // CRÍTICO: Previene race conditions y deadlocks en ejecuciones paralelas
     // Si estos valores son 0, múltiples ejecuciones podrían intentar DELETE
-    // de los mismos 1.37M registros históricos causando lock escalation
+    // de los mismos registros históricos causando lock escalation en SQL Server
     if (!idEjecucion || idEjecucion <= 0) {
       const error = new Error(
         `ID_Ejecucion inválido (${idEjecucion}). Debe ser > 0 para garantizar aislamiento en ejecuciones paralelas.`
@@ -368,12 +416,12 @@ class BasePipelineService {
         `Fund: ${fund.Nombre_Fondo || fund.ID_Fund}`
       );
 
-      // NUEVO: Registrar en Fondos_Problema
+      // Registrar problema causado por este SP específico
       await this.registerFundProblem(
         idEjecucion,
         fund.ID_Fund,
         spName,
-        `Uncommittable transaction (XACT_STATE=-1) - SP caused constraint violation or trigger error`
+        `Transacción uncommittable (XACT_STATE=-1) - SP causó violación de constraint o error en trigger`
       );
 
       // Rollback inmediato
@@ -417,11 +465,11 @@ class BasePipelineService {
     //   7 = Stand-by DESCUADRES-CAPM (pausa antes PNL)
     //   8 = Stand-by DESCUADRES-GENERAL (pausa post-proceso)
 
-    // *** NUEVO: Manejo de códigos stand-by (5-8) ***
+    // Manejo de códigos stand-by (5-8: SUCIEDADES, HOMOLOGACION, DESCUADRES)
     if (returnValue >= 5 && returnValue <= 8) {
       await this._handleStandByCode(returnValue, spName, context);
 
-      // Lanzar excepción especial (NO es error, es pausa válida)
+      // Lanzar excepción especial (NO es error, es pausa válida que requiere aprobación)
       const error = new StandByRequiredError(
         `Stand-by requerido por ${spName}`,
         returnValue,
@@ -448,12 +496,11 @@ class BasePipelineService {
       throw new Error(`${spName} requiere retry (deadlock/timeout)`);
     }
 
-    // *** DEPRECATED: Código 1 (warning general) eliminado ***
-    // Si un SP retorna código 1, loguear pero NO es esperado
+    // Validación de código legacy (eliminado pero puede aparecer en SPs antiguos)
     if (returnValue === 1) {
       await this.logWarning(idEjecucion, fund.ID_Fund,
-        `[DEPRECATED] ${spName} retornó código 1 (warning). ` +
-        `Este código fue eliminado en Migration 002. ` +
+        `${spName} retornó código 1 (warning deprecado). ` +
+        `Este código fue eliminado. ` +
         `El SP debe retornar 0 (éxito), 3 (error), o 5-8 (stand-by).`
       );
     }
@@ -472,11 +519,25 @@ class BasePipelineService {
   }
 
   /**
-   * Ejecutar función con retry logic (exponential backoff)
+   * Ejecutar función con retry automático (exponential backoff)
    *
-   * @param {Function} fn - Función async a ejecutar
-   * @param {Object} spConfig - Configuración del SP (para retry settings)
-   * @returns {Promise} - Resultado de la función
+   * Reintenta automáticamente en errores retriables:
+   * - Deadlock (SQL error 1205)
+   * - Timeout (ETIMEOUT)
+   * - Errores de conexión (ECONNRESET, ESOCKET)
+   *
+   * @param {Function} fn - Función async a ejecutar (debe retornar Promise)
+   * @param {Object} spConfig - Configuración del SP (para contexto de logs)
+   * @returns {Promise} - Resultado de la función si tiene éxito
+   *
+   * Flujo:
+   * 1. Intenta ejecutar fn()
+   * 2. Si falla, captura detalles del error SQL (number, severity, state, etc.)
+   * 3. Verifica si es error retriable (deadlock, timeout, conexión)
+   * 4. Si es retriable y quedan intentos, espera delay exponencial (5s, 10s, 15s)
+   * 5. Reintenta hasta 3 veces máximo
+   * 6. Si no es retriable o se agotan intentos, lanza el error
+   *
    * @private
    */
   async executeWithRetry(fn, spConfig) {
@@ -489,7 +550,7 @@ class BasePipelineService {
       } catch (error) {
         lastError = error;
 
-        // *** ENHANCED: Capturar detalles completos del error SQL Server ***
+        // Capturar detalles completos del error de SQL Server para diagnóstico
         const errorDetails = {
           number: error.number || 'N/A',
           severity: error.class || 'N/A',
@@ -652,12 +713,25 @@ class BasePipelineService {
   /**
    * Manejar código de stand-by (5-8)
    *
-   * Registra el tipo de stand-by detectado sin bloquear la ejecución.
-   * El bloqueo lo maneja FundOrchestrator consultando logs.Ejecucion_Fondos.
+   * Registra el tipo de stand-by detectado sin bloquear aún la ejecución.
+   * El bloqueo efectivo lo maneja FundOrchestrator consultando logs.Ejecucion_Fondos.
+   *
+   * Tipos de stand-by:
+   * - 5: SUCIEDADES (valores pequeños que requieren aprobación)
+   * - 6: HOMOLOGACION (instrumento sin homologar)
+   * - 7: DESCUADRES-CAPM (diferencia entre IPA y CAPM)
+   * - 8: DESCUADRES-GENERAL (otros descuadres)
    *
    * @param {Number} returnValue - Código de stand-by (5, 6, 7, 8)
-   * @param {String} spName - Nombre del SP
+   * @param {String} spName - Nombre del SP que activó stand-by
    * @param {Object} context - Contexto de ejecución
+   *
+   * Flujo:
+   * 1. Mapea código a tipo de stand-by
+   * 2. Registra en logs con nivel INFO (stand-by NO es error)
+   * 3. El estado se actualiza en logs.Ejecucion_Fondos automáticamente
+   * 4. FundOrchestrator verificará estado antes de continuar con próximo servicio
+   *
    * @private
    */
   async _handleStandByCode(returnValue, spName, context) {
@@ -682,15 +756,26 @@ class BasePipelineService {
   }
 
   /**
-   * Registrar problema de fondo en sandbox.Fondos_Problema
+   * Registrar problema crítico de fondo en sandbox.Fondos_Problema
    *
-   * Método reutilizable para todos los servicios.
-   * Registra problemas críticos que impiden continuar el procesamiento.
+   * Método reutilizable para todos los servicios del pipeline.
+   * Registra problemas críticos que impiden continuar el procesamiento del fondo.
+   * Los fondos registrados aquí son excluidos automáticamente en próximas ejecuciones.
    *
-   * @param {BigInt} idEjecucion - ID de ejecución
-   * @param {Number} idFund - ID del fondo
-   * @param {String} proceso - Proceso que detectó el problema (ej: 'PROCESS_IPA', 'IPA_02')
-   * @param {String} tipoProblema - Descripción del problema
+   * @param {BigInt} idEjecucion - ID de ejecución (para obtener FechaReporte)
+   * @param {Number} idFund - ID del fondo con problema
+   * @param {String} proceso - Proceso que detectó el problema (ej: 'PROCESS_IPA', 'IPA_02_AjusteSONA')
+   * @param {String} tipoProblema - Descripción del problema (ej: 'Sin datos en extract.IPA')
+   *
+   * Flujo:
+   * 1. Obtiene FechaReporte desde logs.Ejecuciones usando ID_Ejecucion
+   * 2. Normaliza fechaReporte a string YYYY-MM-DD si es Date object
+   * 3. Verifica si ya existe registro para este fondo/fecha/proceso
+   * 4. Si existe, agrega tipo de problema al registro actual
+   * 5. Si no existe, crea nuevo registro en sandbox.Fondos_Problema
+   * 6. Registra en logs con nivel ERROR
+   *
+   * Nota: Usa conexión independiente para evitar conflictos con transacciones activas
    */
   async registerFundProblem(idEjecucion, idFund, proceso, tipoProblema) {
     // FIX: Usar nueva conexión independiente para evitar conflictos con transacciones activas

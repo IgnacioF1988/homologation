@@ -1,31 +1,42 @@
 /**
- * IPAService - Servicio de Procesamiento IPA
+ * IPAService - Servicio de procesamiento IPA (Inteligencia de Precios de Activos)
  *
- * Ejecuta el pipeline completo de procesamiento IPA para un fondo específico:
- * 1. IPA_01_RescatarLocalPrice - Extrae datos de IPA y PosModRF
- * 2. IPA_02_AjusteSONA - Calcula ajustes SONA vs IPA
- * 3. IPA_03_RenombrarCxCCxP - Renombra cuentas por cobrar/pagar
- * 4. IPA_04_TratamientoSuciedades - Trata suciedades (valores pequeños)
- * 5. IPA_05_EliminarCajasMTM - Elimina cajas MTM duplicadas
- * 6. IPA_06_CrearDimensiones - Homologa dimensiones (fondos, instrumentos, monedas)
- * 7. IPA_07_AgruparRegistros - Agrupa registros finales
+ * Ejecuta el pipeline completo de 7 pasos secuenciales de procesamiento IPA
+ * para un fondo específico. IPA es el proceso central que homologa y consolida
+ * posiciones de activos financieros.
  *
- * Características:
- * - Procesa un fondo individual a la vez
- * - Usa tablas temporales: #temp_IPA_WorkTable_[ID_Ejecucion]_[ID_Fund]
- * - Tracking granular por sub-paso (Estado_IPA_01, Estado_IPA_02, etc.)
- * - Retry automático en errores recuperables
- * - Logging detallado de cada paso
+ * RECIBE:
+ * - serviceConfig: Configuración desde pipeline.config.yaml (7 SPs secuenciales)
+ * - pool: Pool de conexiones SQL Server (compartido)
+ * - tracker: ExecutionTracker para actualizar estados granulares
+ * - logger: LoggingService para registrar eventos
+ * - trace: TraceService (opcional)
+ * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
  *
- * Uso:
- * ```javascript
- * const ipaService = new IPAService(serviceConfig, pool, tracker, logger);
- * const result = await ipaService.execute({
- *   idEjecucion: 12345n,
- *   fechaReporte: '2025-12-19',
- *   fund: { ID_Fund: 789, FundShortName: 'MLAT', Portfolio_Geneva: 'MLAT' }
- * });
- * ```
+ * PROCESA (7 pasos secuenciales):
+ * 1. IPA_01_RescatarLocalPrice_v2: Extrae datos de extract.IPA y extract.PosModRF
+ * 2. IPA_02_AjusteSONA_v2: Calcula ajustes SONA vs IPA
+ * 3. IPA_03_RenombrarCxCCxP_v2: Renombra cuentas por cobrar/pagar
+ * 4. IPA_04_TratamientoSuciedades_v2: Trata suciedades (valores pequeños, puede activar stand-by)
+ * 5. IPA_05_EliminarCajasMTM_v2: Elimina cajas MTM duplicadas
+ * 6. IPA_06_CrearDimensiones_v2: Homologa dimensiones (fondos, instrumentos, monedas)
+ * 7. IPA_07_AgruparRegistros_v2: Agrupa registros finales por dimensión
+ *
+ * ENVIA:
+ * - Datos a: staging.IPA_Final (tabla temporal para el fondo)
+ * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_IPA_01 hasta Estado_IPA_07)
+ * - Logs a: LoggingService → logs.Ejecucion_Logs
+ *
+ * DEPENDENCIAS:
+ * - Requiere: EXTRACCION completada (extract.IPA, extract.PosModRF con datos)
+ * - Requerido por: PROCESS_CAPM (usa #temp_IPA_Cash), PROCESS_PNL (usa staging.IPA_Final)
+ *
+ * CONTEXTO PARALELO:
+ * - Procesa 1 fondo a la vez de forma aislada
+ * - Usa tablas temporales nombradas: #temp_IPA_WorkTable_[ID_Ejecucion]_[ID_Fund]
+ * - Los 7 pasos se ejecutan secuencialmente en una transacción (mantiene temp tables)
+ * - Tracking granular: cada paso actualiza su sub-estado (Estado_IPA_01, Estado_IPA_02, etc.)
+ * - Sin contención: cada fondo tiene sus propias temp tables
  */
 
 const BasePipelineService = require('./BasePipelineService');

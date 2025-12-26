@@ -1,20 +1,37 @@
 /**
  * WorkerPool - Pool de Workers para Ejecución Paralela Controlada
  *
- * Maneja la ejecución de tareas en paralelo con límite de concurrencia,
+ * Maneja la ejecución de tareas (FundOrchestrators) en paralelo con límite de concurrencia,
  * evitando sobrecarga del sistema (CPU, conexiones BD, memoria).
  *
- * Características:
- * - Límite configurable de workers concurrentes
- * - Cola FIFO para tareas pendientes
- * - Auto-procesamiento de cola
- * - Métricas de utilización
+ * RECIBE:
+ * - maxConcurrent: Límite de workers concurrentes (default: 5, configurable 3-50)
+ * - tasks: Funciones async a ejecutar (FundOrchestrator.execute() por cada fondo)
+ * - metadata: Información de contexto (fundId, fechaReporte) para logging
  *
- * Uso:
- * ```javascript
- * const pool = new WorkerPool(5); // Máximo 5 tareas concurrentes
- * const result = await pool.enqueue(() => myAsyncTask());
- * ```
+ * PROCESA:
+ * 1. Encola tareas recibidas en cola FIFO (First In, First Out)
+ * 2. Ejecuta hasta maxConcurrent tareas simultáneas
+ * 3. Al completar una tarea, automáticamente toma la siguiente de la cola
+ * 4. Captura errores de tareas individuales sin detener el pool
+ * 5. Mantiene estadísticas: totalEnqueued, totalCompleted, totalFailed, peakConcurrency
+ * 6. Permite throttling adaptativo (cambiar maxConcurrent en runtime)
+ *
+ * ENVIA:
+ * - Resultados a: Caller (Promise resuelto) → procesos.v2.routes.js
+ * - Logs a: Console con estado de workers y duración de tareas
+ * - Estadísticas a: getStatus() → métricas de utilización del pool
+ *
+ * DEPENDENCIAS:
+ * - Requiere: Ninguna (clase standalone)
+ * - Requerido por: procesos.v2.routes.js (ejecuta N FundOrchestrators en paralelo)
+ *
+ * CONTEXTO PARALELO:
+ * - Pool COMPARTIDO: una sola instancia maneja todos los fondos del proceso
+ * - Límite de concurrencia: previene sobrecarga (demasiados fondos simultáneos)
+ * - Cola FIFO: garantiza orden de llegada (fairness entre fondos)
+ * - Sin bloqueo mutuo: cada FundOrchestrator es independiente (propias temp tables)
+ * - Throttling adaptativo: se puede ajustar maxConcurrent basado en carga del sistema
  */
 
 class WorkerPool {

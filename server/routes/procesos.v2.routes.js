@@ -1,8 +1,52 @@
 /**
- * Rutas de Procesos v2 - Ejecución paralela por fondo
- * Nuevas rutas para el sistema de logging estructurado
- * 
- * v2.1 - Corregido: el SP crea la ejecución internamente
+ * Rutas de Procesos v2 - API REST del Pipeline ETL
+ *
+ * Punto de entrada para ejecutar el pipeline ETL con arquitectura paralela por fondo.
+ * Provee rutas REST para iniciar procesos, consultar estados, y obtener logs.
+ *
+ * RECIBE (API REST):
+ * - POST /v2/ejecutar: {fechaReporte: 'YYYY-MM-DD', fondos?: number[], descripcion?: string}
+ * - GET /v2/estado/:idProceso: Consulta estado de un proceso
+ * - GET /v2/estado/ejecucion/:idEjecucion: Consulta estado de una ejecución (fondo)
+ * - GET /v2/logs/proceso/:idProceso: Obtiene logs de un proceso
+ * - GET /v2/logs/ejecucion/:idEjecucion: Obtiene logs de una ejecución (fondo)
+ *
+ * PROCESA:
+ * 1. POST /v2/ejecutar:
+ *    a. Valida fecha (formato YYYY-MM-DD)
+ *    b. Llama a logs.sp_Inicializar_Proceso (crea proceso + N ejecuciones en BD)
+ *    c. Obtiene lista de ejecuciones creadas desde logs.Ejecuciones
+ *    d. Filtra fondos si se especificó array de fondos
+ *    e. Inicia executeProcessV2 en background (no bloquea respuesta)
+ *    f. Retorna inmediatamente: {idProceso, fechaReporte, ejecuciones[]}
+ * 2. executeProcessV2 (background):
+ *    a. Obtiene configuración de fondos desde maestros.Fondos
+ *    b. Crea N FundOrchestrators (1 por fondo, cada uno = 1 ejecución)
+ *    c. Ejecuta fondos en paralelo usando Promise.all (concurrencia ilimitada)
+ *    d. Cada FundOrchestrator ejecuta su pipeline independiente (IPA → CAPM → PNL → etc.)
+ *    e. Actualiza estado del proceso al completar: OK/ERROR/PARCIAL
+ *    f. Notifica frontend vía WebSocket (EXECUTION_UPDATE)
+ * 3. GET routes: consultan logs.Ejecuciones, logs.Ejecucion_Fondos, logs.Ejecucion_Logs
+ *
+ * ENVIA:
+ * - Respuesta REST inmediata: {success, idProceso, fechaReporte, ejecuciones[]}
+ * - Actualizaciones en background a: logs.Ejecuciones (estado proceso), logs.Ejecucion_Fondos (estado fondos)
+ * - Eventos WebSocket a: Frontend (actualizaciones tiempo real vía WebSocketManager)
+ * - Logs a: logs.Ejecucion_Logs (LoggingService bulk insert)
+ *
+ * DEPENDENCIAS:
+ * - Requiere: SQL Server pool, FundOrchestrator, ExecutionTracker, LoggingService, TraceService
+ * - Requerido por: Frontend (inicia procesos y consulta estados)
+ *
+ * CONTEXTO PARALELO:
+ * - Arquitectura jerárquica: 1 Proceso → N Ejecuciones (1 por fondo)
+ * - POST /v2/ejecutar NO espera a que termine el proceso (responde inmediatamente)
+ * - executeProcessV2 se ejecuta en background (async sin await en caller)
+ * - Cada fondo se procesa en paralelo: Promise.all de N FundOrchestrators
+ * - Concurrencia ilimitada: todos los fondos arrancan simultáneamente
+ * - WorkerPool: NO se usa aquí (fondos ejecutan directamente con Promise.all)
+ * - Estado en memoria: activeExecutions Map (TTL 1 hora, max 50 procesos)
+ * - Limpieza periódica: cada 10 min elimina procesos completados antiguos
  */
 
 const express = require('express');
@@ -58,7 +102,7 @@ setInterval(() => {
 // Body: { fechaReporte: 'YYYY-MM-DD', idFund?: string }
 // ============================================
 router.post('/v2/ejecutar', async (req, res) => {
-  const { fechaReporte, idFund } = req.body;
+  const { fechaReporte, idFund, fondos, descripcion } = req.body;
 
   // Validar fecha
   if (!fechaReporte || !/^\d{4}-\d{2}-\d{2}$/.test(fechaReporte)) {
@@ -95,19 +139,32 @@ router.post('/v2/ejecutar', async (req, res) => {
       iniciadoEn: new Date(),
     });
 
-    // Responder inmediatamente con el ID
+    // Ejecutar el proceso en background (con filtro de fondos si se especificó)
+    executeProcessV2(pool, idProceso, fechaReporte, fondos);
+
+    // Obtener lista de ejecuciones creadas para respuesta
+    const ejecucionesResult = await pool.request()
+      .input('ID_Proceso', sql.BigInt, idProceso)
+      .query(`
+        SELECT
+          e.ID_Ejecucion,
+          e.ID_Fund,
+          ef.FundShortName
+        FROM logs.Ejecuciones e
+        INNER JOIN logs.Ejecucion_Fondos ef ON e.ID_Ejecucion = ef.ID_Ejecucion
+        WHERE e.ID_Proceso = @ID_Proceso
+        ${fondos && fondos.length > 0 ? `AND e.ID_Fund IN (${fondos.join(',')})` : ''}
+        ORDER BY e.ID_Fund
+      `);
+
+    // Responder inmediatamente con el ID y lista de ejecuciones
     res.json({
       success: true,
-      data: {
-        ID_Proceso: idProceso,
-        FechaReporte: fechaReporte,
-        Estado: 'EN_PROGRESO',
-        IniciadoEn: new Date().toISOString(),
-      },
+      idProceso,
+      fechaReporte,
+      descripcion: descripcion || `Proceso ${idProceso}`,
+      ejecuciones: ejecucionesResult.recordset,
     });
-
-    // Ejecutar el proceso en background
-    executeProcessV2(pool, idProceso, fechaReporte);
 
   } catch (err) {
     console.error('Error iniciando ejecución:', err);
@@ -120,14 +177,14 @@ router.post('/v2/ejecutar', async (req, res) => {
 
 // Función para ejecutar el proceso en background usando Pipeline V2
 // NUEVO: Usa FundOrchestrator con servicios individuales en vez de SP batch V1
-async function executeProcessV2(pool, idProceso, fechaReporte) {
+async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
   try {
     // El proceso ya fue inicializado por sp_Inicializar_Proceso
     // con múltiples ejecuciones hijas (una por fondo) en logs.Ejecuciones
 
     console.log(`[Proceso ${idProceso}] Iniciando Pipeline V2 para fecha ${fechaReporte}...`);
 
-    // 1. Obtener todas las ejecuciones hijas del proceso
+    // 1. Obtener todas las ejecuciones hijas del proceso (opcionalmente filtradas por fondos)
     const ejecucionesResult = await pool.request()
       .input('ID_Proceso', sql.BigInt, idProceso)
       .query(`
@@ -145,11 +202,12 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
         FROM logs.Ejecuciones e
         INNER JOIN logs.Ejecucion_Fondos ef ON e.ID_Ejecucion = ef.ID_Ejecucion
         WHERE e.ID_Proceso = @ID_Proceso
+        ${fondos && fondos.length > 0 ? `AND e.ID_Fund IN (${fondos.join(',')})` : ''}
         ORDER BY e.ID_Fund
       `);
 
     const ejecuciones = ejecucionesResult.recordset;
-    console.log(`[Proceso ${idProceso}] Ejecuciones cargadas: ${ejecuciones.length} fondos`);
+    console.log(`[Proceso ${idProceso}] Ejecuciones cargadas: ${ejecuciones.length} fondos${fondos ? ` (filtrado: ${fondos.join(',')})` : ''}`);
 
     if (ejecuciones.length === 0) {
       throw new Error('No hay ejecuciones hijas para procesar');
@@ -278,6 +336,86 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
     throw err;
   }
 }
+
+// ============================================
+// GET /api/procesos/v2/:idProceso/estado
+// Obtiene estado agregado de un proceso
+// ============================================
+router.get('/v2/:idProceso/estado', async (req, res) => {
+  const { idProceso } = req.params;
+
+  try {
+    const pool = await getInteligenciaPool();
+
+    // Obtener información del proceso
+    const procesoResult = await pool.request()
+      .input('ID_Proceso', sql.BigInt, idProceso)
+      .query(`
+        SELECT
+          ID_Proceso,
+          FechaReporte,
+          Estado,
+          FechaInicio,
+          FechaFin
+        FROM logs.Procesos
+        WHERE ID_Proceso = @ID_Proceso
+      `);
+
+    if (procesoResult.recordset.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Proceso no encontrado',
+      });
+    }
+
+    const proceso = procesoResult.recordset[0];
+
+    // Obtener resumen de ejecuciones
+    const ejecucionesResult = await pool.request()
+      .input('ID_Proceso', sql.BigInt, idProceso)
+      .query(`
+        SELECT
+          COUNT(*) as totalFondos,
+          SUM(CASE WHEN Estado IN ('COMPLETADO', 'COMPLETADO_CON_WARNINGS') THEN 1 ELSE 0 END) as fondosCompletados,
+          SUM(CASE WHEN Estado IN ('ERROR', 'COMPLETADO_CON_ERRORES') THEN 1 ELSE 0 END) as fondosConErrores,
+          SUM(CASE WHEN Estado = 'EN_PROGRESO' THEN 1 ELSE 0 END) as fondosEnProgreso
+        FROM logs.Ejecuciones
+        WHERE ID_Proceso = @ID_Proceso
+      `);
+
+    const summary = ejecucionesResult.recordset[0];
+
+    // Determinar estado general
+    let estado = proceso.Estado || 'EN_PROGRESO';
+    if (summary.fondosConErrores === summary.totalFondos) {
+      estado = 'ERROR';
+    } else if (summary.fondosCompletados === summary.totalFondos) {
+      estado = 'COMPLETADO';
+    } else if (summary.fondosCompletados > 0 && (summary.fondosCompletados + summary.fondosConErrores) === summary.totalFondos) {
+      estado = 'COMPLETADO_CON_ERRORES';
+    }
+
+    res.json({
+      success: true,
+      idProceso: parseInt(idProceso),
+      estado,
+      fechaReporte: proceso.FechaReporte,
+      totalFondos: summary.totalFondos,
+      fondosCompletados: summary.fondosCompletados,
+      fondosConErrores: summary.fondosConErrores,
+      fondosEnProgreso: summary.fondosEnProgreso,
+      inicio: proceso.FechaInicio,
+      fin: proceso.FechaFin
+    });
+
+  } catch (err) {
+    console.error('Error obteniendo estado del proceso:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
 
 // ============================================
 // GET /api/procesos/v2/ejecucion/:id
