@@ -29,32 +29,32 @@ services:
     name: "Extracción de Datos"
     type: parallel                   # Ejecuta por fondo individual (per-fund isolation)
     dependencies: []                 # Sin dependencias previas (primer paso)
-    maxConcurrent: 50                # Hasta 50 fondos extrayendo en paralelo
+    maxConcurrent: 5                 # Hasta 5 fondos extrayendo en paralelo (optimizado para reducir contención SQL)
     spList:
       - name: extract.Extract_IPA
         order: 1
         parallel: true               # Puede ejecutarse en paralelo con otros extractores
-        timeout: 300000              # 5 minutos
+        timeout: 60000               # 60 segundos (con 20 fondos en paralelo, cada SP puede tardar más)
       - name: extract.Extract_PosModRF
         order: 1
         parallel: true
-        timeout: 180000
+        timeout: 60000
       - name: extract.Extract_SONA
         order: 1
         parallel: true
-        timeout: 180000
+        timeout: 60000
       - name: extract.Extract_CAPM
         order: 1
         parallel: true
-        timeout: 300000
+        timeout: 60000
       - name: extract.Extract_Derivados
         order: 1
         parallel: true
-        timeout: 180000
+        timeout: 60000
       - name: extract.Extract_UBS
         order: 1
         parallel: true
-        timeout: 180000
+        timeout: 60000
       - name: extract.Extract_UBS_MonedaDerivados
         order: 2                     # Depende de Extract_UBS
         parallel: false
