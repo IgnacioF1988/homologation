@@ -171,8 +171,8 @@ class ExtractionService {
    * @private
    */
   async _executeParallelSPs(sps, idProceso, idEjecucion, fechaReporte, fund) {
-    // Límite de concurrencia: ejecutar hasta 4 extractores en paralelo por fondo
-    const limit = pLimit(4);
+    // Límite de concurrencia: ejecutar hasta 2 extractores en paralelo por fondo (evita saturar SQL Server)
+    const limit = pLimit(2);
 
     const promises = sps.map(spConfig =>
       limit(() => this._executeSP(spConfig, idProceso, idEjecucion, fechaReporte, fund))
