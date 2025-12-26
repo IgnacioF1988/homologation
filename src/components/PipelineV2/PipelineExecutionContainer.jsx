@@ -66,11 +66,17 @@ const PipelineExecutionContainer = () => {
     },
   });
 
-  // Hook de polling
+  // Hook de polling (DESHABILITADO cuando WebSocket está activo y conectado)
   const pollingHook = useExecutionPolling(
     executionState.ejecucion?.ID_Ejecucion,
     {
-      enabled: !!executionState.ejecucion && !executionState.isFinished,
+      // Solo habilitar polling si:
+      // 1. Hay ejecución activa
+      // 2. No ha terminado
+      // 3. WebSocket NO está habilitado O no está conectado (fallback)
+      enabled: !!executionState.ejecucion &&
+               !executionState.isFinished &&
+               (!executionState.webSocket.enabled || !executionState.webSocket.isConnected),
       onUpdate: (data) => {
         executionState.updateFromPolling(data);
       },

@@ -108,9 +108,11 @@ class ValidationService extends BasePipelineService {
         await this.logWarning(idEjecucion, null,
           `⚠️ Validación global completada en ${duration}ms - ${problemas.total} fondos con problemas detectados`);
 
-        // Generar reporte detallado
+        // Generar reporte detallado en el campo 'detalle' para evitar truncamiento
         const reporte = this._generarReporte(problemas);
-        await this.logWarning(idEjecucion, null, reporte);
+        await this.logWarning(idEjecucion, null,
+          '📋 REPORTE DE VALIDACIÓN POST-EXTRACCIÓN',
+          { detalle: reporte });
 
         await this.updateState(idEjecucion, null, 'WARNING');
         return { success: true, problemasDetectados: problemas.total, detalle: problemas };
@@ -324,7 +326,6 @@ class ValidationService extends BasePipelineService {
    */
   _generarReporte(problemas) {
     const lineas = [
-      '📋 REPORTE DE VALIDACIÓN POST-EXTRACCIÓN:',
       '================================================'
     ];
 

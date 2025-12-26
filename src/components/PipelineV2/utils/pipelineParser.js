@@ -29,21 +29,24 @@ export const parseFondo = (fondoBackend) => {
   const flags = parseFlags(fondoBackend);
 
   // Parsear tiempos
-  const startTime = fondoBackend.FechaInicio ? new Date(fondoBackend.FechaInicio).getTime() : null;
-  const endTime = fondoBackend.FechaFin ? new Date(fondoBackend.FechaFin).getTime() : null;
-  const duration = fondoBackend.DuracionSegundos ? fondoBackend.DuracionSegundos * 1000 : null;
+  // IMPORTANTE: El backend retorna Inicio_Procesamiento, Fin_Procesamiento, Duracion_Ms
+  const startTime = fondoBackend.Inicio_Procesamiento ? new Date(fondoBackend.Inicio_Procesamiento).getTime() : null;
+  const endTime = fondoBackend.Fin_Procesamiento ? new Date(fondoBackend.Fin_Procesamiento).getTime() : null;
+  const duration = fondoBackend.Duracion_Ms || null;
 
   // Error info
+  // IMPORTANTE: El backend retorna Paso_Con_Error, Mensaje_Error
   const errorInfo = hasError ? {
-    step: fondoBackend.PasoError || 'Desconocido',
-    message: fondoBackend.MensajeError || 'Error sin mensaje',
+    step: fondoBackend.Paso_Con_Error || 'Desconocido',
+    message: fondoBackend.Mensaje_Error || 'Error sin mensaje',
   } : null;
 
   // Construir objeto parseado
   const parsed = {
     id: String(fondoBackend.ID_Fund),
-    fullName: fondoBackend.NombreFondo || 'Sin nombre',
-    shortName: fondoBackend.CodigoCortoFondo || fondoBackend.NombreFondo || 'SIN_CODIGO',
+    // IMPORTANTE: El backend retorna FundName (del JOIN) y FundShortName
+    fullName: fondoBackend.FundName || fondoBackend.FundShortName || 'Sin nombre',
+    shortName: fondoBackend.FundShortName || fondoBackend.FundName || 'SIN_CODIGO',
     status,
     hasError,
     hasWarning,
@@ -306,12 +309,17 @@ export const parseFlags = (fondoBackend) => {
  */
 export const computeSimpleHash = (fondo) => {
   // Hash basado en campos críticos
+  // IMPORTANTE: Incluir ID de stage + estado para detectar cambios en cualquier etapa
   const parts = [
     fondo.id,
     fondo.status,
     fondo.startTime,
     fondo.endTime,
-    fondo.stages.map(s => s.estado).join('|'),
+    // Incluir ID:estado para cada stage (más robusto que solo estado)
+    fondo.stages.map(s => `${s.id}:${s.estado}`).join('|'),
+    fondo.hasError,
+    fondo.hasWarning,
+    fondo.isProcessing,
   ];
 
   return parts.join('::');

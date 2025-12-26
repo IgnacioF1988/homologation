@@ -13,7 +13,7 @@ const HOST = '0.0.0.0'; // Escuchar en todas las interfaces
 const server = app.listen(PORT, HOST, () => {
   console.log(`🚀 Servidor HTTP corriendo en http://0.0.0.0:${PORT}`);
   console.log(`📊 Dashboard Local: http://localhost:${PORT}/dashboard.html`);
-  console.log(`📊 Dashboard Red: http://10.56.220.95:${PORT}/dashboard.html`);
+  console.log(`📊 Dashboard Red: http://10.56.220.92:${PORT}/dashboard.html`);
 });
 
 // Crear servidor WebSocket

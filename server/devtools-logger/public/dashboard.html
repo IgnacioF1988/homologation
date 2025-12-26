@@ -344,77 +344,9 @@
       return log.level === currentFilter;
     }
 
-    function extractJSONFromMessage(message) {
-      if (!message || typeof message !== 'string') {
-        return null;
-      }
-
-      // Buscar el ÚLTIMO ";" que marca el fin de los estilos CSS
-      const lastSemicolon = message.lastIndexOf(';');
-
-      if (lastSemicolon > 0) {
-        // Hay estilos CSS, el JSON empieza después del último ;
-        const afterCss = message.substring(lastSemicolon + 1).trimStart();
-        const jsonStart = afterCss.search(/\{|\[/);
-
-        if (jsonStart === -1) return null;
-
-        // Intentar parsear el JSON
-        for (let endIndex = afterCss.length; endIndex > jsonStart; endIndex--) {
-          try {
-            const jsonStr = afterCss.substring(jsonStart, endIndex).trim();
-            const parsed = JSON.parse(jsonStr);
-
-            // Limpiar el texto antes del JSON de estilos CSS
-            let textBefore = message.substring(0, lastSemicolon + 1)
-              .replace(/color:\s*[^;]+;?/g, '')
-              .replace(/font-weight:\s*[^;]+;?/g, '')
-              .replace(/font-size:\s*[^;]+;?/g, '')
-              .replace(/background:\s*[^;]+;?/g, '')
-              .replace(/%c/g, '')
-              .replace(/\s+/g, ' ')
-              .trim();
-
-            // Agregar el texto entre el CSS y el JSON
-            const textBetween = afterCss.substring(0, jsonStart).trim();
-            if (textBetween) {
-              textBefore = textBefore + ' ' + textBetween;
-            }
-
-            return { parsed, textBefore };
-          } catch (e) {
-            // Continuar intentando con menos caracteres
-          }
-        }
-      } else {
-        // No hay estilos CSS, buscar el primer { (objeto JSON, no array [)
-        const possibleJsonStart = message.indexOf('{');
-
-        if (possibleJsonStart === -1) return null;
-
-        for (let endIndex = message.length; endIndex > possibleJsonStart; endIndex--) {
-          try {
-            const jsonStr = message.substring(possibleJsonStart, endIndex).trim();
-            const parsed = JSON.parse(jsonStr);
-
-            let textBefore = message.substring(0, possibleJsonStart)
-              .replace(/%c/g, '')
-              .replace(/\s+/g, ' ')
-              .trim();
-
-            return { parsed, textBefore };
-          } catch (e) {
-            // Continuar
-          }
-        }
-      }
-
-      return null;
-    }
-
     function parseStyledMessage(message) {
       if (!message || typeof message !== 'string') {
-        return message || '';
+        return escapeHtml(message || '');
       }
 
       // Remover TODOS los estilos CSS del mensaje
@@ -428,6 +360,17 @@
         .trim();
 
       return cleanMessage;
+    }
+
+    function tryParseJSON(str) {
+      const jsonMatch = str.match(/\{[^{}]*\}|\[[^\[\]]*\]/);
+      if (!jsonMatch) return null;
+      
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (e) {
+        return null;
+      }
     }
 
     function renderJSON(data) {
@@ -492,19 +435,17 @@
       });
 
       const icon = getLogIcon(log.message);
-      const rawMessage = log.message || JSON.stringify(log);
-
-      // Primero intentar extraer JSON ANTES de limpiar estilos
-      const jsonResult = extractJSONFromMessage(rawMessage);
+      const cleanMessage = parseStyledMessage(log.message || JSON.stringify(log));
+      
+      // Intentar parsear JSON del mensaje
+      const jsonData = tryParseJSON(cleanMessage);
       let messageHTML;
-
-      if (jsonResult) {
-        // Separar el texto antes del JSON y renderizar el JSON como tabla
-        const textPart = jsonResult.textBefore || '';
-        messageHTML = (textPart ? escapeHtml(textPart) + '<br>' : '') + renderJSON(jsonResult.parsed);
+      
+      if (jsonData) {
+        // Separar el texto del JSON
+        const textPart = cleanMessage.replace(/\{[^{}]*\}|\[[^\[\]]*\]/, '').trim();
+        messageHTML = escapeHtml(textPart) + renderJSON(jsonData);
       } else {
-        // Si no hay JSON, limpiar estilos normalmente
-        const cleanMessage = parseStyledMessage(rawMessage);
         messageHTML = escapeHtml(cleanMessage);
       }
 

@@ -82,19 +82,22 @@ class LoggingService {
       return;
     }
 
+    // Asegurar que metadata sea un objeto (manejar null/undefined)
+    const meta = metadata || {};
+
     // Crear entrada de log
     const logEntry = {
       idEjecucion,
       idFund: idFund ? String(idFund) : null, // Convertir a string (tabla espera VARCHAR(50))
       timestamp: new Date(),
       nivel,
-      categoria: metadata.categoria || 'PIPELINE', // Valor por defecto (NOT NULL)
+      categoria: meta.categoria || 'PIPELINE', // Valor por defecto (NOT NULL)
       etapa,
-      subEtapa: metadata.subEtapa || null,
+      subEtapa: meta.subEtapa || null,
       mensaje,
-      detalle: metadata.detalle || null,
-      datosJSON: metadata.metadata ? JSON.stringify(metadata.metadata) : null,
-      stackTrace: metadata.stackTrace || null,
+      detalle: meta.detalle || null,
+      datosJSON: meta.metadata ? JSON.stringify(meta.metadata) : null,
+      stackTrace: meta.stackTrace || null,
     };
 
     // Agregar a buffer
@@ -185,13 +188,28 @@ class LoggingService {
       table.columns.add('Categoria', sql.VarChar(30), { nullable: false });
       table.columns.add('Etapa', sql.VarChar(50), { nullable: false });
       table.columns.add('SubEtapa', sql.VarChar(50), { nullable: true });
-      table.columns.add('Mensaje', sql.NVarChar(2000), { nullable: false });
+      table.columns.add('Mensaje', sql.NVarChar(1000), { nullable: false });
       table.columns.add('Detalle', sql.NVarChar(sql.MAX), { nullable: true });
       table.columns.add('Datos_JSON', sql.NVarChar(sql.MAX), { nullable: true });
       table.columns.add('Stack_Trace', sql.NVarChar(sql.MAX), { nullable: true });
 
       // Agregar filas (orden debe coincidir con las columnas)
       logsToInsert.forEach(log => {
+        // Truncar mensaje a 1000 caracteres para coincidir con la tabla
+        // Si el mensaje original era más largo y no hay detalle, preservar el mensaje completo en detalle
+        const maxMensajeLength = 1000;
+        let mensaje = log.mensaje || '';
+        let detalle = log.detalle;
+
+        if (mensaje.length > maxMensajeLength) {
+          // Si hay overflow y no hay detalle, mover el mensaje completo al detalle
+          if (!detalle) {
+            detalle = mensaje;
+          }
+          // Truncar mensaje con indicador
+          mensaje = mensaje.substring(0, maxMensajeLength - 3) + '...';
+        }
+
         table.rows.add(
           log.idEjecucion,
           log.idFund,
@@ -200,8 +218,8 @@ class LoggingService {
           log.categoria,
           log.etapa,
           log.subEtapa,
-          log.mensaje ? log.mensaje.substring(0, 2000) : null, // Truncar si excede 2000 caracteres
-          log.detalle,
+          mensaje,
+          detalle,
           log.datosJSON,
           log.stackTrace
         );

@@ -6,7 +6,9 @@
       "Bash(printenv:*)",
       "Bash(cat:*)",
       "Bash(npm install)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "Bash(taskkill:*)",
+      "mcp__filesystem__list_directory"
     ]
   },
   "enabledMcpjsonServers": [

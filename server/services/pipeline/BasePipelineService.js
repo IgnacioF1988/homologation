@@ -530,6 +530,34 @@ class BasePipelineService {
       this.config.tracking.stateField,
       estado
     );
+
+    // Emitir actualización por WebSocket
+    const updates = {};
+    updates[this.config.tracking.stateField] = estado;
+    await this.emitFundUpdate(idEjecucion, idFund, updates);
+  }
+
+  /**
+   * Emitir actualización de fondo por WebSocket
+   * @private
+   */
+  async emitFundUpdate(idEjecucion, idFund, updates) {
+    try {
+      const wsManager = require('../websocket/WebSocketManager');
+
+      wsManager.emitToExecution(idEjecucion, {
+        type: 'FUND_UPDATE',
+        data: {
+          ID_Ejecucion: idEjecucion,
+          ID_Fund: idFund,
+          ...updates,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      // No fallar pipeline si falla WebSocket
+      console.warn('[BasePipelineService] Error emitiendo WebSocket:', error.message);
+    }
   }
 
   /**
@@ -538,6 +566,11 @@ class BasePipelineService {
    */
   async updateSubState(idEjecucion, idFund, subStateField, estado) {
     await this.tracker.updateFundState(idEjecucion, idFund, subStateField, estado);
+
+    // Emitir actualización por WebSocket
+    const updates = {};
+    updates[subStateField] = estado;
+    await this.emitFundUpdate(idEjecucion, idFund, updates);
   }
 
   /**
@@ -711,22 +744,22 @@ class BasePipelineService {
   // Logging helpers
   // ============================================
 
-  async logInfo(idEjecucion, idFund, mensaje) {
-    await this.logger.log(idEjecucion, idFund, 'INFO', this.id, mensaje);
+  async logInfo(idEjecucion, idFund, mensaje, metadata = null) {
+    await this.logger.log(idEjecucion, idFund, 'INFO', this.id, mensaje, metadata);
   }
 
-  async logWarning(idEjecucion, idFund, mensaje) {
-    await this.logger.log(idEjecucion, idFund, 'WARNING', this.id, mensaje);
+  async logWarning(idEjecucion, idFund, mensaje, metadata = null) {
+    await this.logger.log(idEjecucion, idFund, 'WARNING', this.id, mensaje, metadata);
   }
 
-  async logError(idEjecucion, idFund, mensaje) {
-    await this.logger.log(idEjecucion, idFund, 'ERROR', this.id, mensaje);
+  async logError(idEjecucion, idFund, mensaje, metadata = null) {
+    await this.logger.log(idEjecucion, idFund, 'ERROR', this.id, mensaje, metadata);
   }
 
-  async logDebug(idEjecucion, idFund, mensaje) {
+  async logDebug(idEjecucion, idFund, mensaje, metadata = null) {
     // Solo logear si nivel es DEBUG
     if (this.logger.level === 'DEBUG') {
-      await this.logger.log(idEjecucion, idFund, 'DEBUG', this.id, mensaje);
+      await this.logger.log(idEjecucion, idFund, 'DEBUG', this.id, mensaje, metadata);
     }
   }
 }

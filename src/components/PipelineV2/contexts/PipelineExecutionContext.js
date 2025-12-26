@@ -23,7 +23,20 @@ export const PipelineExecutionProvider = ({ children }) => {
 
   // Actualizar ejecución
   const updateEjecucion = useCallback((newEjecucion) => {
-    setEjecucion(newEjecucion);
+    if (!newEjecucion) {
+      setEjecucion(null);
+      return;
+    }
+
+    // FIXED: Crear siempre un nuevo objeto para garantizar re-render
+    // Esto evita problemas de reactividad si el endpoint retorna el mismo objeto
+    setEjecucion(prev => {
+      // Si es la misma ejecución, forzar nueva referencia
+      if (prev?.ID_Ejecucion === newEjecucion.ID_Ejecucion) {
+        return { ...newEjecucion };
+      }
+      return newEjecucion;
+    });
   }, []);
 
   // Limpiar ejecución

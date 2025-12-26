@@ -3,10 +3,11 @@
  * Combina ExecutionContext y FondosContext para acceso unificado al estado
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { usePipelineExecution } from '../contexts/PipelineExecutionContext';
 import { usePipelineFondos } from '../contexts/PipelineFondosContext';
 import { parseFondos } from '../utils/pipelineParser';
+import { useWebSocketExecution } from './useWebSocketExecution';
 
 /**
  * useExecutionState - Hook central de estado de ejecución
@@ -18,11 +19,21 @@ export const useExecutionState = () => {
   const execution = usePipelineExecution();
   const fondos = usePipelineFondos();
 
-  // Computed: Estado actual de la ejecución
-  const executionStatus = useMemo(() => {
-    if (!execution.ejecucion) return 'idle';
+  // Feature flag para WebSocket (default: true - actualizaciones en tiempo real)
+  const [useWebSocket, setUseWebSocket] = useState(true);
 
-    const estado = execution.ejecucion.Estado;
+  // WebSocket para actualizaciones en tiempo real
+  const ws = useWebSocketExecution(
+    execution.ejecucion?.ID_Ejecucion,
+    useWebSocket
+  );
+
+  // Computed: Estado actual de la ejecución
+  // FIXED: Extraer valor primitivo para evitar problemas de reactividad
+  const estado = execution.ejecucion?.Estado;
+
+  const executionStatus = useMemo(() => {
+    if (!estado) return 'idle';
 
     if (estado === 'COMPLETADO') return 'completed';
     if (estado === 'ERROR') return 'error';
@@ -31,7 +42,7 @@ export const useExecutionState = () => {
     if (estado === 'INICIALIZANDO') return 'initializing';
 
     return 'idle';
-  }, [execution.ejecucion]);
+  }, [estado]); // Depender solo del valor primitivo, no del objeto completo
 
   // Computed: ¿Está la ejecución activa?
   const isExecuting = useMemo(() => {
@@ -226,6 +237,19 @@ export const useExecutionState = () => {
     hasChanges: fondos.hasChanges,
     getChangeInfo: fondos.getChangeInfo,
     clearChangeFlags: fondos.clearChangeFlags,
+
+    // WebSocket
+    webSocket: {
+      enabled: useWebSocket,
+      isConnected: ws.isConnected,
+      isConnecting: ws.isConnecting,
+      error: ws.error,
+      reconnectAttempts: ws.reconnectAttempts,
+      hasMaxReconnectAttempts: ws.hasMaxReconnectAttempts,
+    },
+    toggleWebSocket: () => setUseWebSocket(!useWebSocket),
+    enableWebSocket: () => setUseWebSocket(true),
+    disableWebSocket: () => setUseWebSocket(false),
   };
 };
 

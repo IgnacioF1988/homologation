@@ -1,0 +1,13 @@
+{
+  "name": "devtools-logger",
+  "version": "1.0.0",
+  "description": "WebSocket server para logging en tiempo real de DevTools",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2",
+    "express": "^4.18.2"
+  }
+}

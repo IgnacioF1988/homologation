@@ -257,7 +257,7 @@ class FundOrchestrator {
     // Concurrencia reducida para evitar sobrecarga
     // RCSI (Read Committed Snapshot Isolation) habilitado en BD elimina bloqueos de lectura
     // Pool configurado con min=3 connections para evitar cross-contamination
-    const concurrencyLimit = Math.min(this.fondos.length, 3);
+    const concurrencyLimit = Math.min(this.fondos.length, 50);
     const limit = pLimit(concurrencyLimit);
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Concurrencia: ${concurrencyLimit} fondos en paralelo (RCSI habilitado)`);
@@ -328,8 +328,75 @@ class FundOrchestrator {
   }
 
   /**
+   * Verificar si fondo está en stand-by y si servicio debe bloquearse
+   * - Consulta logs.Ejecucion_Fondos para estado stand-by
+   * - Determina qué servicios bloquear según PuntoBloqueoActual
+   *
+   * @param {Object} fund - Fondo a verificar
+   * @param {String} serviceId - ID del servicio a ejecutar
+   * @returns {Object} - { isPaused: Boolean, puntoBloqueo: String, motivo: String }
+   * @private
+   */
+  async _checkFundStandByStatus(fund, serviceId) {
+    try {
+      const result = await this.pool.request()
+        .input('ID_Ejecucion', sql.BigInt, this.idEjecucion)
+        .input('ID_Fund', sql.Int, fund.ID_Fund)
+        .query(`
+          SELECT EstadoStandBy, PuntoBloqueoActual,
+                 TieneSuciedades, TieneProblemasHomologacion,
+                 TieneDescuadres, TieneProblemasCAPM
+          FROM logs.Ejecucion_Fondos
+          WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund
+        `);
+
+      if (!result.recordset[0] || result.recordset[0].EstadoStandBy !== 'PAUSADO') {
+        return { isPaused: false };
+      }
+
+      const estado = result.recordset[0];
+
+      // Mapear puntos de bloqueo a servicios bloqueados
+      const puntosBloqueo = {
+        'ANTES_CAPM': ['PROCESS_CAPM', 'PROCESS_PNL', 'PROCESS_UBS'],
+        'MID_IPA': ['PROCESS_CAPM', 'PROCESS_PNL', 'PROCESS_UBS', 'PROCESS_DERIVADOS'],
+        'ANTES_PNL': ['PROCESS_PNL'],
+        'MID_CAPM': ['PROCESS_PNL'],
+        'MID_PNL': [],
+        'MID_DERIVADOS': [],
+        'POST_DERIVADOS': [], // Warning, no bloquea servicios
+        'POST_PNL': [] // Warning, no bloquea servicios
+      };
+
+      const serviciosBloqueados = puntosBloqueo[estado.PuntoBloqueoActual] || [];
+
+      if (serviciosBloqueados.includes(serviceId)) {
+        const motivos = [];
+        if (estado.TieneSuciedades) motivos.push('Suciedades');
+        if (estado.TieneProblemasHomologacion) motivos.push('Homologación');
+        if (estado.TieneDescuadres) motivos.push('Descuadres');
+        if (estado.TieneProblemasCAPM) motivos.push('CAPM');
+
+        return {
+          isPaused: true,
+          puntoBloqueo: estado.PuntoBloqueoActual,
+          motivo: motivos.join(', ')
+        };
+      }
+
+      return { isPaused: false };
+    } catch (error) {
+      console.warn(
+        `[FundOrchestrator ${this.idEjecucion}] Error verificando stand-by para fondo ${fund.ID_Fund}: ${error.message}`
+      );
+      return { isPaused: false }; // Fail-safe: permitir ejecución si hay error
+    }
+  }
+
+  /**
    * Ejecutar servicios para un fondo específico
    * - Verifica exclusión automática (sandbox.Fondos_Problema)
+   * - Verifica stand-by (logs.FondosEnStandBy)
    * - Verifica condicionales (Flag_UBS, Flag_Derivados)
    * - Ejecuta servicios en orden
    * - Maneja errores según política (STOP_ALL, STOP_FUND, CONTINUE)
@@ -351,6 +418,28 @@ class FundOrchestrator {
         if (!service) {
           console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio no encontrado: ${serviceId} (Fondo ${fund.ID_Fund})`);
           continue;
+        }
+
+        // NUEVO: Verificar stand-by ANTES de ejecutar servicio
+        const standByStatus = await this._checkFundStandByStatus(fund, serviceId);
+        if (standByStatus.isPaused) {
+          await this.logger.log(
+            this.idEjecucion,
+            fund.ID_Fund,
+            'INFO',
+            'FundOrchestrator',
+            null,
+            `⏸️ Fondo en stand-by - Bloqueando ${serviceId}. Motivo: ${standByStatus.motivo}`
+          );
+
+          await this.tracker.updateFundState(
+            this.idEjecucion,
+            fund.ID_Fund,
+            `Estado_Process_${serviceId}`,
+            'BLOQUEADO_STANDBY'
+          );
+
+          break; // DETENER ejecución de servicios siguientes
         }
 
         // Verificar condicional (ej: Flag_UBS, Flag_Derivados)
@@ -529,6 +618,26 @@ class FundOrchestrator {
 
       // Actualizar tabla logs.Ejecuciones
       await this.tracker.actualizarEstadoEjecucion(this.idEjecucion, estado, stats);
+
+      // Emitir actualización de ejecución por WebSocket
+      try {
+        const wsManager = require('../websocket/WebSocketManager');
+
+        wsManager.emitToExecution(this.idEjecucion, {
+          type: 'EXECUTION_UPDATE',
+          data: {
+            ID_Ejecucion: this.idEjecucion,
+            Estado: estado,
+            FondosExitosos: stats.fondosOK,
+            FondosFallidos: stats.fondosError,
+            FondosWarning: stats.fondosWarning,
+            FondosOmitidos: stats.fondosOmitidos,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      } catch (error) {
+        console.warn('[FundOrchestrator] Error emitiendo WebSocket:', error.message);
+      }
 
       console.log(
         `[FundOrchestrator ${this.idEjecucion}] Stats actualizados - ` +

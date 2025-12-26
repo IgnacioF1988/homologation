@@ -4,6 +4,9 @@ require('dotenv').config();
 
 const { getPool, getPoolHomologacion, closePool } = require('./config/database');
 
+// Importar WebSocket Manager
+const wsManager = require('./services/websocket/WebSocketManager');
+
 // Importar rutas
 const catalogosRoutes = require('./routes/catalogos.routes');
 const instrumentosRoutes = require('./routes/instrumentos.routes');
@@ -158,6 +161,16 @@ const server = app.listen(PORT, HOST, async () => {
   }
 
   // ============================================
+  // INICIALIZAR WEBSOCKET MANAGER
+  // ============================================
+  try {
+    wsManager.initialize(server, getPool);
+    console.log('✅ WebSocket Manager inicializado\n');
+  } catch (err) {
+    console.error('❌ Error inicializando WebSocket Manager:', err.message);
+  }
+
+  // ============================================
   // JOBS DE SINCRONIZACIÓN - ELIMINADOS
   // ============================================
   // Sistema de sincronización bidireccional eliminado el 2025-12-18
@@ -167,7 +180,14 @@ const server = app.listen(PORT, HOST, async () => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Apagando servidor...');
+
+  // Cerrar WebSocket Manager
+  wsManager.close();
+
+  // Cerrar conexiones de BD
   await closePool();
+
+  // Cerrar servidor HTTP
   server.close(() => {
     console.log('👋 Servidor cerrado\n');
     process.exit(0);
@@ -176,7 +196,14 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Apagando servidor...');
+
+  // Cerrar WebSocket Manager
+  wsManager.close();
+
+  // Cerrar conexiones de BD
   await closePool();
+
+  // Cerrar servidor HTTP
   server.close(() => {
     console.log('👋 Servidor cerrado\n');
     process.exit(0);

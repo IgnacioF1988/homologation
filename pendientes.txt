@@ -29,3 +29,27 @@ I've identified the problem! The JOIN condition in IPA_04 requires an exact Qty 
   - The table has 1340 rows but only 971 distinct Portfolio+InvestID pairs, meaning multiple historical Qty values per instrument
 
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+investigar:
+ Excellent! I found the root cause! The Qty BETWEEN -1000 AND 1000 filter is excluding ALL matches because:
+
+  - BNYMSWEEP: IPA_Qty = 88,486.76 (excluded, > 1000)
+  - BRASKM bonds: IPA_Qty = 400,000 to 1,700,000 (excluded, > 1000)
+  - TRAJAM: IPA_Qty = 167,430 (excluded, > 1000)
+
+  The dimensionales.Suciedades_IPA table contains a master list of instruments that should be flagged as suciedades, regardless of their current quantity. The filter is preventing the marking from happening.
+
+  Let me create migration 003_v4 to remove this filter:
+  ⎿  Wrote 1 lines to server\database\migrations\003_v4_FIX_IPA_04_Remove_Qty_Filter.sql
+     -- ============================================
+     -- Migration 003_v4: FIX IPA_04 - Remove Qty BETWEEN -1000 AND 1000 filter
+     -- ============================================
+     -- Descripción: El filtro "AND ipa.Qty BETWEEN -1000 AND 1000" estaba excluyendo
+     --              TODOS los matches porque dimensionales.Suciedades_IPA contiene
+     --              instrumentos que DEBEN marcarse como suciedades independientemente
+     --              de su cantidad actual en el extract
+     --
+     -- Problema: Instrumentos como BNYMSWEEP (Qty=88,486), BRASKM (Qty=400,000+)
+     --           están en dimensionales.Suciedades_IPA pero el filtro los excluye
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

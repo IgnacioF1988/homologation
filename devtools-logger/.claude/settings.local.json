@@ -1,0 +1,9 @@
+{
+  "enabledMcpjsonServers": [
+    "chrome-devtools",
+    "playwright",
+    "exa",
+    "sqlserver-moneda",
+    "filesystem"
+  ]
+}

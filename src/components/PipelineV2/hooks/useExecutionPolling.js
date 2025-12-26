@@ -41,6 +41,18 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
   const isMountedRef = useRef(true);
   const consecutiveErrorsRef = useRef(0);
 
+  // Refs para callbacks para evitar recreación de poll
+  const onUpdateRef = useRef(onUpdate);
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+
+  // Actualizar refs cuando cambien los callbacks
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+    onCompleteRef.current = onComplete;
+    onErrorRef.current = onError;
+  }, [onUpdate, onComplete, onError]);
+
   /**
    * poll - Función de polling
    */
@@ -62,22 +74,38 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
       setLastError(null);
       setLastUpdate(new Date());
 
-      // Callback de actualización
-      if (onUpdate) {
-        onUpdate(response);
+      // Callback de actualización (usar ref para evitar dependencia)
+      if (onUpdateRef.current) {
+        onUpdateRef.current(response);
       }
 
-      // Verificar si la ejecución ha completado
-      const estado = response.ejecucion?.Estado;
+      // FIXED: Acceder a response.data.ejecucion (apiClient retorna {success, data})
+      const estado = response.data?.ejecucion?.Estado;
       const isComplete = estado === 'COMPLETADO' || estado === 'ERROR' || estado === 'PARCIAL';
 
-      if (isComplete) {
-        // Detener polling
-        stopPolling();
+      console.log('[useExecutionPolling] Poll response:', {
+        idEjecucion,
+        estado,
+        isComplete,
+        hasData: !!response.data,
+        hasEjecucion: !!response.data?.ejecucion,
+        responseKeys: Object.keys(response || {})
+      });
 
-        // Callback de completado
-        if (onComplete) {
-          onComplete(response);
+      if (isComplete) {
+        console.log('[useExecutionPolling] Ejecución completada, deteniendo polling...');
+
+        // Detener polling inline para evitar problemas de closure
+        if (intervalRef.current) {
+          console.log('[useExecutionPolling] Deteniendo polling');
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        setIsPolling(false);
+
+        // Callback de completado (usar ref)
+        if (onCompleteRef.current) {
+          onCompleteRef.current(response);
         }
       }
     } catch (error) {
@@ -89,9 +117,9 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
 
       console.error('[useExecutionPolling] Error en polling:', error);
 
-      // Callback de error
-      if (onError) {
-        onError(error);
+      // Callback de error (usar ref)
+      if (onErrorRef.current) {
+        onErrorRef.current(error);
       }
 
       // Si excedemos el máximo de errores, detener polling
@@ -100,8 +128,8 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
         stopPolling();
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idEjecucion, onUpdate, onComplete, onError, maxErrors]);
+    // Solo depender de idEjecucion y maxErrors (callbacks usan refs)
+  }, [idEjecucion, maxErrors]);
 
   /**
    * startPolling - Inicia el polling
@@ -135,8 +163,9 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
       console.log('[useExecutionPolling] Deteniendo polling');
       clearInterval(intervalRef.current);
       intervalRef.current = null;
-      setIsPolling(false);
     }
+    // FIXED: Siempre actualizar estado, incluso si intervalRef ya era null
+    setIsPolling(false);
   }, []);
 
   /**
@@ -176,6 +205,10 @@ export const useExecutionPolling = (idEjecucion, options = {}) => {
     return () => {
       stopPolling();
     };
+    // CRITICAL: Solo depender de enabled e idEjecucion
+    // NO incluir startPolling/stopPolling para evitar loop infinito
+    // Esto es seguro porque startPolling/stopPolling solo dependen de valores
+    // que ya están controlados por enabled/idEjecucion o son estables (refs)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, idEjecucion]);
 

@@ -264,8 +264,11 @@ router.get('/v2/ejecucion/:id', async (req, res) => {
           ef.Estado_Concatenar,
           -- Estado final
           ef.Estado_Final,
+          ef.Paso_Con_Error,
           ef.Mensaje_Error,
+          ef.Inicio_Procesamiento,
           ef.Fin_Procesamiento,
+          ef.Duracion_Ms,
           -- Flags
           ef.Requiere_Derivados,
           ef.Incluir_En_Cubo,
