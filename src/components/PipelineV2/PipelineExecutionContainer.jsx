@@ -143,9 +143,6 @@ const PipelineExecutionContainer = () => {
     console.log('[PipelineContainer] Mostrar detalles de fondo:', fondo);
   }, []);
 
-  // Determinar si puede ejecutar
-  const canExecute = !executionState.isExecuting && !actions.isBusy;
-
   // Determinar si puede reprocesar
   const canReprocess = executionState.isFinished && !actions.isReprocessing;
 
@@ -156,8 +153,6 @@ const PipelineExecutionContainer = () => {
         <PipelineHeader
           ejecucion={null}
           isPolling={false}
-          onNewExecution={handleNewExecution}
-          canExecute={canExecute}
         />
 
         <EmptyState
@@ -185,8 +180,6 @@ const PipelineExecutionContainer = () => {
       <PipelineHeader
         ejecucion={executionState.ejecucion}
         isPolling={pollingHook.isPolling}
-        onNewExecution={handleNewExecution}
-        canExecute={canExecute}
       />
 
       {/* Roadmap general (contexto visual) */}

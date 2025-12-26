@@ -1,11 +1,10 @@
 /**
  * PipelineHeader - Header Principal del Pipeline
- * Muestra título, información de ejecución y botón de nueva ejecución
+ * Muestra título e información de ejecución
  */
 
 import React from 'react';
-import { Box, Typography, Button, Chip, Tooltip } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import { Box, Typography, Chip } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import { formatTimestamp, formatExecutionId } from '../../utils/formatters';
 import { blink } from '../../utils/animationKeyframes';
@@ -17,15 +16,11 @@ import { colors } from '../../../../styles/theme';
  * @param {Object} props
  * @param {Object} props.ejecucion - Ejecución actual (opcional)
  * @param {boolean} props.isPolling - Si está haciendo polling
- * @param {Function} props.onNewExecution - Callback para nueva ejecución
- * @param {boolean} props.canExecute - Si puede ejecutar (default: true)
  * @param {Object} props.sx - Estilos adicionales
  */
 export const PipelineHeader = ({
   ejecucion,
   isPolling = false,
-  onNewExecution,
-  canExecute = true,
   sx = {},
 }) => {
   return (
@@ -41,7 +36,7 @@ export const PipelineHeader = ({
       }}
     >
       {/* Título e información de ejecución */}
-      <Box sx={{ flex: 1, minWidth: 300 }}>
+      <Box sx={{ flex: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
           <Typography
             variant="h4"
@@ -143,48 +138,6 @@ export const PipelineHeader = ({
           </Typography>
         )}
       </Box>
-
-      {/* Botón de nueva ejecución */}
-      <Tooltip
-        title={
-          !canExecute
-            ? 'No se puede ejecutar en este momento'
-            : 'Iniciar nueva ejecución del pipeline'
-        }
-      >
-        <span>
-          <Button
-            variant="contained"
-            startIcon={<PlayArrowIcon />}
-            onClick={onNewExecution}
-            disabled={!canExecute}
-            sx={{
-              backgroundColor: colors.primary.main,
-              color: '#fff',
-              fontWeight: 600,
-              px: 3,
-              py: 1.5,
-              borderRadius: '12px',
-              textTransform: 'none',
-              fontSize: '1rem',
-              boxShadow: '0 4px 12px rgba(33, 150, 243, 0.3)',
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                backgroundColor: colors.primary.dark,
-                transform: 'translateY(-2px)',
-                boxShadow: '0 8px 20px rgba(33, 150, 243, 0.4)',
-              },
-              '&:disabled': {
-                backgroundColor: colors.grey[300],
-                color: colors.grey[500],
-                boxShadow: 'none',
-              },
-            }}
-          >
-            Nueva Ejecución
-          </Button>
-        </span>
-      </Tooltip>
     </Box>
   );
 };
