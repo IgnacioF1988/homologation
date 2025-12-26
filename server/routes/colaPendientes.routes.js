@@ -1,9 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getPoolHomologacion, sql } = require('../config/database');
-
-// Alias para compatibilidad con código existente
-const getPool = getPoolHomologacion;
+const { getPool, sql } = require('../config/database');
 
 // GET /api/cola-pendientes - Pendientes con paginación
 // Query params: estado, resetEnProceso, page (default 1), limit (default 100, max 500)
@@ -17,10 +14,15 @@ router.get('/', async (req, res) => {
     const pool = await getPool();
 
     // Si se pide reset, primero resetear los en_proceso a pendiente
+    // EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
     if (resetEnProceso === 'true') {
-      await pool.request().query(
-        "UPDATE sandbox.colaPendientes SET estado = 'pendiente' WHERE estado = 'en_proceso'"
-      );
+      await pool.request().query(`
+        UPDATE sandbox.colaPendientes
+        SET estado = 'pendiente'
+        WHERE estado = 'en_proceso'
+          AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
+               OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
+      `);
     }
 
     // Construir WHERE clause
@@ -72,19 +74,27 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/cola-pendientes/reset-en-proceso - Resetear todos los en_proceso a pendiente
+// EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
 router.post('/reset-en-proceso', async (req, res) => {
   try {
     const pool = await getPool();
 
-    // Contar cuántos hay en_proceso antes del reset
-    const countBefore = await pool.request().query(
-      "SELECT COUNT(*) as count FROM sandbox.colaPendientes WHERE estado = 'en_proceso'"
-    );
+    // Contar cuántos hay en_proceso antes del reset (excluding BBG)
+    const countBefore = await pool.request().query(`
+      SELECT COUNT(*) as count FROM sandbox.colaPendientes
+      WHERE estado = 'en_proceso'
+        AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
+             OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
+    `);
 
-    // Resetear todos los en_proceso a pendiente
-    await pool.request().query(
-      "UPDATE sandbox.colaPendientes SET estado = 'pendiente' WHERE estado = 'en_proceso'"
-    );
+    // Resetear todos los en_proceso a pendiente (excluding BBG)
+    await pool.request().query(`
+      UPDATE sandbox.colaPendientes
+      SET estado = 'pendiente'
+      WHERE estado = 'en_proceso'
+        AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
+             OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
+    `);
 
     res.json({
       success: true,

@@ -1,11 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
-const { getPool, getPoolHomologacion, closePool } = require('./config/database');
-
-// Importar WebSocket Manager
-const wsManager = require('./services/websocket/WebSocketManager');
+const { getPool, closePool } = require('./config/database');
 
 // Importar rutas
 const catalogosRoutes = require('./routes/catalogos.routes');
@@ -15,6 +13,7 @@ const colaPendientesRoutes = require('./routes/colaPendientes.routes');
 const procesosV2Routes = require('./routes/procesos.v2.routes');
 const sandboxQueuesRoutes = require('./routes/sandboxQueues.routes');
 const logsRoutes = require('./routes/logs.routes');
+const bloombergRoutes = require('./routes/bloomberg.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -36,19 +35,12 @@ app.use((req, res, next) => {
 // Health check
 app.get('/api/health', async (req, res) => {
   try {
-    const poolPrincipal = await getPool();
-    const poolHomologacion = await getPoolHomologacion();
-
-    const result1 = await poolPrincipal.request().query('SELECT DB_NAME() as db');
-    const result2 = await poolHomologacion.request().query('SELECT DB_NAME() as db');
-
+    const pool = await getPool();
+    const result = await pool.request().query('SELECT 1 as connected');
     res.json({
       success: true,
       status: 'healthy',
-      databases: {
-        principal: result1.recordset[0].db,
-        homologacion: result2.recordset[0].db,
-      },
+      database: 'connected',
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
@@ -72,6 +64,8 @@ app.use('/api/procesos', procesosV2Routes);
 app.use('/api/sandbox-queues', sandboxQueuesRoutes);
 // Rutas de logs
 app.use('/api/logs', logsRoutes);
+// Rutas de Bloomberg job queue
+app.use('/api/bloomberg', bloombergRoutes);
 
 // Ruta raíz
 app.get('/api', (req, res) => {
@@ -122,6 +116,16 @@ app.get('/api', (req, res) => {
         update: 'PUT /api/cola-pendientes/:id',
         delete: 'DELETE /api/cola-pendientes/:id',
       },
+      bloomberg: {
+        instruments: 'GET /api/bloomberg/instruments',
+        createJob: 'POST /api/bloomberg/jobs',
+        getJob: 'GET /api/bloomberg/jobs/:job_id',
+        getJobs: 'GET /api/bloomberg/jobs',
+        summary: 'GET /api/bloomberg/summary',
+        cleanup: 'POST /api/bloomberg/cleanup',
+        cashflows: 'GET /api/bloomberg/cashflows/:pk2',
+        logs: 'GET /api/bloomberg/logs',
+      },
     },
   });
 });
@@ -150,24 +154,13 @@ const server = app.listen(PORT, HOST, async () => {
   console.log(`📚 API docs: http://localhost:${PORT}/api`);
   console.log(`❤️  Health check: http://localhost:${PORT}/api/health\n`);
 
-  // Probar conexión a ambas BDs
+  // Probar conexión a BD
   try {
     await getPool();
-    await getPoolHomologacion();
-    console.log('✅ Conexiones a SQL Server establecidas (ambas BDs)\n');
+    console.log('✅ Conexión a SQL Server establecida\n');
   } catch (err) {
     console.error('❌ Error conectando a SQL Server:', err.message);
     console.log('   Verifica la configuración en el archivo .env\n');
-  }
-
-  // ============================================
-  // INICIALIZAR WEBSOCKET MANAGER
-  // ============================================
-  try {
-    wsManager.initialize(server, getPool);
-    console.log('✅ WebSocket Manager inicializado\n');
-  } catch (err) {
-    console.error('❌ Error inicializando WebSocket Manager:', err.message);
   }
 
   // ============================================
@@ -180,14 +173,7 @@ const server = app.listen(PORT, HOST, async () => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Apagando servidor...');
-
-  // Cerrar WebSocket Manager
-  wsManager.close();
-
-  // Cerrar conexiones de BD
   await closePool();
-
-  // Cerrar servidor HTTP
   server.close(() => {
     console.log('👋 Servidor cerrado\n');
     process.exit(0);
@@ -196,14 +182,7 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Apagando servidor...');
-
-  // Cerrar WebSocket Manager
-  wsManager.close();
-
-  // Cerrar conexiones de BD
   await closePool();
-
-  // Cerrar servidor HTTP
   server.close(() => {
     console.log('👋 Servidor cerrado\n');
     process.exit(0);

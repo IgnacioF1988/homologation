@@ -20,7 +20,7 @@ import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 
 import InstrumentForm from '../components/InstrumentForm';
-import PipelineExecution from '../components/PipelineV2';
+import PipelineExecution from '../components/PipelineExecution';
 import WorkQueue from '../components/WorkQueue';
 import SearchHelper from '../components/SearchHelper';
 import { DimensionalExplorer, DimensionalExplorerFab } from '../components/DimensionalExplorer';

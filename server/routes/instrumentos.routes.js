@@ -1,9 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getPoolHomologacion, sql } = require('../config/database');
-
-// Alias para compatibilidad con código existente
-const getPool = getPoolHomologacion;
+const { getPool, sql } = require('../config/database');
 
 // Mapeo de campos frontend → columnas BD
 // El frontend usa los mismos nombres que la BD, pero algunos campos legacy pueden venir diferentes
@@ -402,6 +399,27 @@ router.post('/', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: 'Se requieren idInstrumento y moneda',
+    });
+  }
+
+  // =========================================================================
+  // GATE: Reject BBG fixed income - must go through colaPendientes queue
+  // Fixed income (investmentTypeCode=1) with yield_Source='BBG' requires
+  // Bloomberg characteristics (coco, callable, sinkable, yas_yld_flag) that
+  // are only available after the BBG worker processes the instrument.
+  // =========================================================================
+  const isBBGFixedIncome =
+    parseInt(data.investmentTypeCode) === 1 &&
+    (data.yieldSource === 'BBG' || data.yieldSource === 'Bloomberg');
+
+  if (isBBGFixedIncome) {
+    console.log('[POST /instrumentos] GATE: Rejecting BBG fixed income - must use colaPendientes queue');
+    return res.status(400).json({
+      success: false,
+      error: 'Los instrumentos de renta fija con fuente BBG deben crearse a través de la cola de homologación',
+      errorEn: 'BBG fixed income instruments must be created through the homologation queue (colaPendientes)',
+      code: 'BBG_REQUIRES_QUEUE',
+      suggestion: 'Use the instrument form with source="colaPendientes" to create this instrument',
     });
   }
 

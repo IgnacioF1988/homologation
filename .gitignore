@@ -6,8 +6,3 @@ build/
 nul
 package-lock.json
 backups/
-server/.env
-server/node_modules
-devtools-logger/node_modules
-public/.env
-server/.env
