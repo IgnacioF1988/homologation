@@ -175,6 +175,7 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
 
       return new FundOrchestrator(
         ejecucion.ID_Ejecucion,  // ID único por fondo
+        idProceso,                // ID del proceso padre
         fechaReporte,
         [fondoData],              // Array de UN SOLO fondo
         pool,
@@ -187,7 +188,32 @@ async function executeProcessV2(pool, idProceso, fechaReporte) {
     await Promise.all(orchestrators.map(orc => orc.initialize()));
     console.log(`[Proceso ${idProceso}] ${orchestrators.length} orquestadores inicializados`);
 
-    // 5. Ejecutar todos los orquestadores en paralelo
+    // 4.5. Ejecutar extracción batch UNA VEZ (solo en el primer orquestador)
+    if (orchestrators.length > 0) {
+      console.log(`[Proceso ${idProceso}] Ejecutando extracción batch (una vez)...`);
+      await orchestrators[0]._executeBatchPhasesOnce();
+      console.log(`[Proceso ${idProceso}] ✓ Extracción batch completada`);
+    }
+
+    // 4.6. [FASE 2] Etiquetar datos extraídos con ID_Ejecucion
+    console.log(`[Proceso ${idProceso}] [FASE 2] Etiquetando datos extraídos con ID_Ejecucion...`);
+    try {
+      const taggingResult = await pool.request()
+        .input('ID_Proceso', sql.BigInt, idProceso)
+        .input('FechaReporte', sql.NVarChar(10), fechaReporte)
+        .execute('extract.Tag_Extraction_Data');
+
+      if (taggingResult.returnValue === 0) {
+        console.log(`[Proceso ${idProceso}] [FASE 2] ✓ Datos etiquetados exitosamente`);
+      } else {
+        console.warn(`[Proceso ${idProceso}] [FASE 2] Tagging SP retornó: ${taggingResult.returnValue}`);
+      }
+    } catch (taggingError) {
+      console.error(`[Proceso ${idProceso}] [FASE 2] Error etiquetando datos:`, taggingError);
+      throw new Error(`Error en Fase 2 (Tagging): ${taggingError.message}`);
+    }
+
+    // 5. Ejecutar todos los orquestadores en paralelo (solo fases parallel/sequential)
     const results = await Promise.all(
       orchestrators.map(orc =>
         orc.execute()

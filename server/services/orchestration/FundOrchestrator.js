@@ -26,13 +26,14 @@ class FundOrchestrator {
    * Constructor del Orquestador
    *
    * @param {BigInt} idEjecucion - ID de la ejecución en logs.Ejecuciones
+   * @param {BigInt} idProceso - ID del proceso padre en logs.Procesos
    * @param {String} fechaReporte - Fecha a procesar (YYYY-MM-DD)
    * @param {Array} fondos - Array de fondos [{ID_Fund: INT, Portfolio_Geneva, ...}]
    * @param {Object} pool - Connection pool de SQL Server
    * @param {Object} tracker - ExecutionTracker para actualizar estados
    * @param {Object} logger - LoggingService para registrar eventos
    */
-  constructor(idEjecucion, fechaReporte, fondos, pool, tracker, logger) {
+  constructor(idEjecucion, idProceso, fechaReporte, fondos, pool, tracker, logger) {
     // Validación: arquitectura jerárquica requiere 1 fondo por orquestador
     if (!Array.isArray(fondos) || fondos.length !== 1) {
       throw new Error(
@@ -43,6 +44,7 @@ class FundOrchestrator {
     }
 
     this.idEjecucion = idEjecucion;
+    this.idProceso = idProceso;
     this.fechaReporte = fechaReporte;
     this.fondos = fondos; // Array de {ID_Fund: INT, Portfolio_Geneva: string, ...}
     this.pool = pool;
@@ -51,7 +53,8 @@ class FundOrchestrator {
 
     this.config = null; // pipeline.config.yaml
     this.serviceInstances = new Map();
-    this.executionPlan = null; // Array de phases [{services, type, name}]
+    this.executionPlan = null; // Array of phases [{services, type, name}]
+    this.extractionTagged = false; // Flag para ejecutar tagging solo una vez
   }
 
   /**
@@ -184,23 +187,50 @@ class FundOrchestrator {
   }
 
   /**
+   * Ejecutar SOLO las fases BATCH una vez (llamado externamente)
+   * - Usado para ejecutar extracción batch una sola vez para todos los fondos
+   * - Llamado desde routes antes de ejecutar orquestadores en paralelo
+   *
+   * @returns {Promise<void>}
+   */
+  async _executeBatchPhasesOnce() {
+    console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecutando fases BATCH...`);
+
+    for (const phase of this.executionPlan) {
+      if (phase.type === 'batch') {
+        console.log(`[FundOrchestrator ${this.idEjecucion}] Fase batch: ${phase.name}`);
+        await this._executeBatchPhase(phase);
+      }
+    }
+
+    console.log(`[FundOrchestrator ${this.idEjecucion}] Fases BATCH completadas`);
+  }
+
+  /**
    * Ejecutar el pipeline completo
    * - Itera por cada fase del execution plan
    * - Ejecuta servicios según tipo (batch, parallel, sequential)
    * - Maneja errores según políticas configuradas
    *
+   * NOTA: Las fases BATCH se ejecutan externamente una sola vez (ver routes),
+   * por lo que este método las OMITE y solo ejecuta parallel/sequential.
+   *
    * @returns {Promise<Object>} - { success, idEjecucion }
    */
   async execute() {
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Iniciando ejecución del pipeline...`);
+    console.log(`[FundOrchestrator ${this.idEjecucion}] Iniciando ejecución del pipeline (parallel/sequential only)...`);
 
     try {
       for (const phase of this.executionPlan) {
         console.log(`[FundOrchestrator ${this.idEjecucion}] Fase: ${phase.name}, Tipo: ${phase.type}`);
 
+        // SKIP batch phases (ejecutadas externalmente)
         if (phase.type === 'batch') {
-          await this._executeBatchPhase(phase);
-        } else if (phase.type === 'parallel') {
+          console.log(`[FundOrchestrator ${this.idEjecucion}] Omitiendo fase batch (ejecutada externamente)`);
+          continue;
+        }
+
+        if (phase.type === 'parallel') {
           await this._executeParallelPhase(phase);
         } else if (phase.type === 'sequential') {
           await this._executeSequentialPhase(phase);
@@ -231,6 +261,9 @@ class FundOrchestrator {
    * - Se ejecuta 1 vez por fecha (no por fondo)
    * - Ejemplo: Extracción de datos (Extract_IPA, Extract_CAPM, etc.)
    *
+   * NOTA: Esta fase debe ejecutarse solo UNA VEZ globalmente, no una vez por orquestador.
+   * El tagging de datos (Fase 2) se ejecuta externamente después de la extracción batch.
+   *
    * @param {Object} phase - Fase con servicios batch
    * @private
    */
@@ -244,12 +277,43 @@ class FundOrchestrator {
 
       const context = {
         idEjecucion: this.idEjecucion,
+        idProceso: this.idProceso,
         fechaReporte: this.fechaReporte,
         fund: null // batch no tiene fondo específico
       };
 
       console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecutando batch: ${service.name}`);
       await service.execute(context);
+    }
+  }
+
+  /**
+   * Etiquetar datos extraídos con ID_Ejecucion (Fase 2)
+   * - Ejecuta extract.Tag_Extraction_Data SP
+   * - Asigna ID_Ejecucion a cada fila basándose en Portfolio
+   * - Permite aislamiento de datos por fondo en procesamiento paralelo
+   *
+   * @private
+   */
+  async _tagExtractionData() {
+    try {
+      console.log(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Etiquetando datos extraídos con ID_Ejecucion...`);
+
+      const result = await this.pool.request()
+        .input('ID_Proceso', sql.BigInt, this.idProceso)
+        .input('FechaReporte', sql.NVarChar(10), this.fechaReporte)
+        .execute('extract.Tag_Extraction_Data');
+
+      const returnValue = result.returnValue;
+
+      if (returnValue === 0) {
+        console.log(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] ✓ Datos etiquetados exitosamente`);
+      } else {
+        console.warn(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Tagging SP retornó: ${returnValue}`);
+      }
+    } catch (error) {
+      console.error(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Error etiquetando datos:`, error);
+      throw new Error(`Error en Fase 2 (Tagging): ${error.message}`);
     }
   }
 
