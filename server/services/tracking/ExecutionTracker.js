@@ -519,6 +519,62 @@ class ExecutionTracker {
       throw error;
     }
   }
+
+  /**
+   * Actualizar estadísticas del proceso padre
+   *
+   * Agrega resultados de todas las ejecuciones hijas y actualiza logs.Procesos
+   * con fondos exitosos, fallidos, omitidos y el estado final del proceso.
+   *
+   * @param {BigInt} idProceso - ID del proceso padre
+   * @returns {Promise<void>}
+   */
+  async updateProcesoStats(idProceso) {
+    try {
+      const request = this.pool.request();
+      await request
+        .input('ID_Proceso', sql.BigInt, idProceso)
+        .query(`
+          UPDATE p SET
+            FondosExitosos = stats.Exitosos,
+            FondosFallidos = stats.Fallidos,
+            FondosOmitidos = stats.Omitidos,
+            Estado = CASE
+              WHEN stats.Fallidos = stats.Total THEN 'ERROR'
+              WHEN stats.Fallidos > 0 THEN 'COMPLETADO_CON_ERRORES'
+              WHEN stats.Exitosos = stats.Total THEN 'COMPLETADO'
+              ELSE 'COMPLETADO_CON_ERRORES'
+            END,
+            Etapa_Actual = CASE
+              WHEN stats.Fallidos = stats.Total THEN 'ERROR'
+              ELSE 'COMPLETADO'
+            END,
+            FechaFin = GETDATE(),
+            Duracion_Total_Ms = DATEDIFF(MILLISECOND, p.FechaInicio, GETDATE())
+          FROM logs.Procesos p
+          CROSS APPLY (
+            SELECT
+              COUNT(*) AS Total,
+              SUM(CASE WHEN e.Estado = 'COMPLETADO' THEN 1 ELSE 0 END) AS Exitosos,
+              SUM(CASE WHEN e.Estado = 'ERROR' THEN 1 ELSE 0 END) AS Fallidos,
+              SUM(CASE WHEN e.Estado = 'OMITIDO' THEN 1 ELSE 0 END) AS Omitidos
+            FROM logs.Ejecuciones e
+            WHERE e.ID_Proceso = @ID_Proceso
+          ) stats
+          WHERE p.ID_Proceso = @ID_Proceso
+        `);
+
+      console.log(
+        `[ExecutionTracker] Estadísticas de proceso actualizadas - ID: ${idProceso}`
+      );
+    } catch (error) {
+      console.error(
+        `[ExecutionTracker] Error actualizando estadísticas del proceso ${idProceso}:`,
+        error
+      );
+      throw error;
+    }
+  }
 }
 
 module.exports = ExecutionTracker;

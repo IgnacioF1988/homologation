@@ -33,6 +33,15 @@ class FundOrchestrator {
    * @param {Object} logger - LoggingService para registrar eventos
    */
   constructor(idEjecucion, fechaReporte, fondos, pool, tracker, logger) {
+    // Validación: arquitectura jerárquica requiere 1 fondo por orquestador
+    if (!Array.isArray(fondos) || fondos.length !== 1) {
+      throw new Error(
+        `FundOrchestrator debe recibir exactamente 1 fondo. ` +
+        `Recibió ${fondos ? fondos.length : 0}. ` +
+        `Use múltiples instancias de FundOrchestrator para múltiples fondos.`
+      );
+    }
+
     this.idEjecucion = idEjecucion;
     this.fechaReporte = fechaReporte;
     this.fondos = fondos; // Array de {ID_Fund: INT, Portfolio_Geneva: string, ...}
