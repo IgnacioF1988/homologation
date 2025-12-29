@@ -186,6 +186,18 @@ const ParametersFISection = ({
             required
             width="md"
           />
+        </FormRow>
+        <FormRow>
+          <SelectField
+            name="override"
+            label="Override"
+            value={formData.override}
+            onChange={handleChange}
+            options={options?.trueFalseValues || []}
+            readOnly={isFieldReadOnly('override')}
+            error={getError('override')}
+            width="md"
+          />
           <TextField
             name="yasYldFlag"
             label="YAS_YLD_FLAG"
@@ -195,8 +207,16 @@ const ParametersFISection = ({
             error={getError('yasYldFlag')}
             width="md"
             type="number"
+            required={formData.override === 'True'}
           />
         </FormRow>
+        {formData.override === 'True' && (
+          <Box sx={{ mt: 1 }}>
+            <Alert severity="warning" sx={{ py: 0.5 }}>
+              Override activado: YAS_YLD_FLAG es obligatorio y se usará en lugar del valor de Bloomberg.
+            </Alert>
+          </Box>
+        )}
         </>
       )}
     </FormSection>

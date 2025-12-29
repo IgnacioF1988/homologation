@@ -24,7 +24,7 @@ BEGIN
     BEGIN TRY
         -- =====================================================================
         -- Parse JSON and batch UPDATE colaPendientes.datosOrigen
-        -- Match by pk2 (built from idInstrumentoOrigen + SubID/moneda)
+        -- Match by pk2 (built from idInstrumentoOrigen + subId/moneda)
         -- =====================================================================
 
         -- Update datosOrigen with BBG fields using JSON_MODIFY
@@ -54,10 +54,10 @@ BEGIN
             ON (
                 -- Build pk2 from colaPendientes to match
                 CAST(cp.idInstrumentoOrigen AS NVARCHAR(50)) + '-' +
-                CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.SubID'), cp.moneda) AS NVARCHAR(10))
+                CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.subId'), cp.moneda) AS NVARCHAR(10))
             ) = bbg.pk2
         WHERE cp.estado = 'en_proceso'
-          AND JSON_VALUE(cp.datosOrigen, '$.yield_Source') = 'BBG';
+          AND JSON_VALUE(cp.datosOrigen, '$.yieldSource') = 'BBG';
 
         SET @UpdatedCount = @@ROWCOUNT;
 

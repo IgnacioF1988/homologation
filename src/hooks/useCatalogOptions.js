@@ -6,6 +6,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 
+// Static options for True/False (used by override field)
+const TRUE_FALSE_OPTIONS = [
+  { value: 'True', label: 'True' },
+  { value: 'False', label: 'False' },
+];
+
 const useCatalogOptions = () => {
   const [options, setOptions] = useState({
     paises: [],
@@ -28,6 +34,8 @@ const useCatalogOptions = () => {
     bankDebtTypes: [],
     fundTypes: [],
     tiposContinuador: [],
+    // Static options
+    trueFalseValues: TRUE_FALSE_OPTIONS,
   });
 
   const [loading, setLoading] = useState(true);
@@ -105,6 +113,8 @@ const useCatalogOptions = () => {
           bankDebtTypes: bankDebtTypesRes.data || [],
           fundTypes: fundTypesRes.data || [],
           tiposContinuador: tiposContinuadorRes.data || [],
+          // Static options (preserve)
+          trueFalseValues: TRUE_FALSE_OPTIONS,
         });
       } catch (err) {
         setError(err.message || 'Error al cargar catalogos');

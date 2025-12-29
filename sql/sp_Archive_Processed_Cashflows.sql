@@ -46,10 +46,10 @@ BEGIN
                 cp.fechaIngreso,
                 cp.fechaProcesado,
                 CAST(cp.idInstrumentoOrigen AS NVARCHAR(50)) + '-' +
-                    CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.SubID'), cp.moneda) AS NVARCHAR(10)) AS pk2
+                    CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.subId'), cp.moneda) AS NVARCHAR(10)) AS pk2
             FROM sandbox.colaPendientes cp
             WHERE cp.estado = 'en_proceso'
-              AND JSON_VALUE(cp.datosOrigen, '$.yield_Source') = 'BBG'
+              AND JSON_VALUE(cp.datosOrigen, '$.yieldSource') = 'BBG'
               -- Must have BBG characteristics enriched
               AND JSON_VALUE(cp.datosOrigen, '$.coco_bbg') IS NOT NULL
               AND JSON_VALUE(cp.datosOrigen, '$.callable_bbg') IS NOT NULL

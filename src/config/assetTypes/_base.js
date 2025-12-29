@@ -289,8 +289,8 @@ export const calculateVisibilityFromConfig = (flowConfig, formData, mode, hasPre
     return visibility;
   }
 
-  // Exacta o Parcial
-  if (mode === 'exacta' || mode === 'parcial') {
+  // Exacta, Parcial, o Modificar - todas las secciones visibles
+  if (mode === 'exacta' || mode === 'parcial' || mode === 'modificar') {
     trace.flow(`Modo ${mode.toUpperCase()} - todas las secciones visibles`);
     visibility.identifiers = true;
     visibility.company = true;

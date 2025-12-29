@@ -40,24 +40,24 @@ BEGIN
         BEGIN TRANSACTION;
 
         -- =====================================================================
-        -- Identify BBG instruments (fixed income with yield_Source = 'BBG')
+        -- Identify BBG instruments (fixed income with yieldSource = 'BBG')
         -- Only parse JSON for records that might be fixed income (optimization)
-        -- Include override and yas_yld_flag for BBG worker
+        -- Include override and yasYldFlag for BBG worker
         -- =====================================================================
         INSERT INTO #BBGInstruments (id, pk2, isin, override, yas_yld_flag)
         SELECT
             cp.id,
-            -- pk2 = idInstrumentoOrigen + '-' + moneda (or SubID from datosOrigen if available)
+            -- pk2 = idInstrumentoOrigen + '-' + moneda (or subId from datosOrigen if available)
             CAST(cp.idInstrumentoOrigen AS NVARCHAR(50)) + '-' +
-                CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.SubID'), cp.moneda) AS NVARCHAR(10)) AS pk2,
+                CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.subId'), cp.moneda) AS NVARCHAR(10)) AS pk2,
             JSON_VALUE(cp.datosOrigen, '$.isin') AS isin,
-            -- Override flag: 'True' means use yas_yld_flag from form, don't fetch from BBG
+            -- Override flag: 'True' means use yasYldFlag from form, don't fetch from BBG
             ISNULL(JSON_VALUE(cp.datosOrigen, '$.override'), 'False') AS override,
-            -- yas_yld_flag from form (used when override='True')
-            JSON_VALUE(cp.datosOrigen, '$.yas_yld_flag') AS yas_yld_flag
+            -- yasYldFlag from form (used when override='True')
+            JSON_VALUE(cp.datosOrigen, '$.yasYldFlag') AS yas_yld_flag
         FROM sandbox.colaPendientes cp
         WHERE cp.estado = 'completado'
-          AND JSON_VALUE(cp.datosOrigen, '$.yield_Source') = 'BBG'
+          AND JSON_VALUE(cp.datosOrigen, '$.yieldSource') = 'BBG'
           AND JSON_VALUE(cp.datosOrigen, '$.isin') IS NOT NULL;
 
         SET @BBGInstrumentsQueued = @@ROWCOUNT;

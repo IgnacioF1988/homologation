@@ -38,11 +38,15 @@ const RestructuringSection = ({
   predecesorError,
   getInstrumentosExistentes,
   options = {},
+  mode = null, // Nuevo: modo del formulario
 }) => {
   // Estado local para la lista de instrumentos (para dropdown)
   const [instrumentos, setInstrumentos] = useState([]);
   const [loadingInstrumentos, setLoadingInstrumentos] = useState(false);
   const [selectedPredecesor, setSelectedPredecesor] = useState(null);
+
+  // Determinar si estamos en modo MODIFICAR
+  const isModificarMode = mode === 'modificar';
 
   // Cargar lista de instrumentos cuando se activa reestructuracion
   useEffect(() => {
@@ -61,6 +65,22 @@ const RestructuringSection = ({
         });
     }
   }, [formData.esReestructuracion, getInstrumentosExistentes]);
+
+  // Auto-sincronizar selectedPredecesor cuando idPredecesor/monedaPredecesor se establecen programáticamente
+  useEffect(() => {
+    if (instrumentos.length > 0 && formData.idPredecesor && formData.monedaPredecesor) {
+      const idNum = parseInt(formData.idPredecesor);
+      const monedaNum = parseInt(formData.monedaPredecesor);
+      const match = instrumentos.find(
+        (i) => i.idInstrumento === idNum && i.moneda === monedaNum
+      );
+      if (match && (!selectedPredecesor ||
+          selectedPredecesor.idInstrumento !== idNum ||
+          selectedPredecesor.moneda !== monedaNum)) {
+        setSelectedPredecesor(match);
+      }
+    }
+  }, [instrumentos, formData.idPredecesor, formData.monedaPredecesor, selectedPredecesor]);
 
   // Obtener error de un campo
   const getError = (fieldName) => {
@@ -224,8 +244,17 @@ const RestructuringSection = ({
             </Alert>
           )}
 
-          {/* Campos de reestructuracion */}
-          {predecesorEncontrado && (
+          {/* En modo MODIFICAR, mostrar mensaje de instrumento cargado */}
+          {isModificarMode && !predecesorEncontrado && !loadingPredecesor && formData.idPredecesor && (
+            <Alert severity="info" sx={{ mt: 2 }} icon={<CheckCircleOutlinedIcon />}>
+              Instrumento cargado para modificación: <strong>ID {formData.idPredecesor}, Moneda {formData.monedaPredecesor}</strong>
+              <br />
+              Seleccione el Tipo de Continuador para crear una nueva versión.
+            </Alert>
+          )}
+
+          {/* Campos de reestructuracion - mostrar cuando hay predecesor O en modo MODIFICAR */}
+          {(predecesorEncontrado || isModificarMode) && (
             <FormRow>
               <SelectField
                 name="tipoContinuador"
@@ -252,7 +281,7 @@ const RestructuringSection = ({
           )}
 
           {/* Mensaje informativo sobre herencia */}
-          {predecesorEncontrado && (
+          {(predecesorEncontrado || isModificarMode) && (
             <Box sx={{ mt: 2 }}>
               <Alert severity="warning" sx={{ py: 0.5 }}>
                 <strong>Importante:</strong> Los siguientes campos NO se heredan y deben completarse manualmente:

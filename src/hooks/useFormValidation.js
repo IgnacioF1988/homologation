@@ -113,10 +113,11 @@ const useFormValidation = (formData, mode) => {
     // Usar helpers centralizados que soportan EQ, Equity, 2, etc.
     const isEquityType = isEquity(formData.investmentTypeCode);
     const isFixedIncomeType = isFixedIncome(formData.investmentTypeCode);
-
-    // Validar identificadores (NO aplica para derivados)
     const isDerivativeType = isDerivative(formData.investmentTypeCode);
-    if (!isDerivativeType) {
+
+    // Validar identificadores - solo aplica para Equity y Fixed Income
+    // Cash, Fund, Bank Debt, Payable/Receivable, Derivative no requieren identificadores
+    if (isEquityType || isFixedIncomeType) {
       if ((mode === FORM_MODES.NUEVA || mode === FORM_MODES.REESTRUCTURACION) && isBBGSource) {
         if (isEquityType && !formData.tickerBBG) {
           newErrors.tickerBBG = IDENTIFIER_ERROR_MESSAGES.BBG_EQUITY_TICKER;
@@ -125,7 +126,7 @@ const useFormValidation = (formData, mode) => {
           newErrors.isin = IDENTIFIER_ERROR_MESSAGES.BBG_FI_ISIN;
         }
       } else if (mode === FORM_MODES.NUEVA) {
-        // Si no es BBG, se recomienda al menos un identificador
+        // Si no es BBG, se recomienda al menos un identificador para EQ/FI
         const hasIdentifier = formData.isin || formData.tickerBBG || formData.sedol || formData.cusip;
         if (!hasIdentifier) {
           newErrors._identifiers = IDENTIFIER_ERROR_MESSAGES.NO_IDENTIFIER;
@@ -138,6 +139,20 @@ const useFormValidation = (formData, mode) => {
       const subIdValue = parseInt(formData.subId);
       if (!formData.subId || ![10000, 20000].includes(subIdValue)) {
         newErrors.subId = IDENTIFIER_ERROR_MESSAGES.DERIVATIVE_SUBID;
+      }
+    }
+
+    // Validar yasYldFlag requerido cuando override='True' (Fixed Income + BBG)
+    if (isFixedIncomeType && isBBGSource && formData.override === 'True') {
+      if (!formData.yasYldFlag && formData.yasYldFlag !== 0) {
+        newErrors.yasYldFlag = 'YAS_YLD_FLAG es obligatorio cuando Override está activado';
+      }
+    }
+
+    // Validar tipoContinuador requerido en modo MODIFICAR
+    if (mode === FORM_MODES.MODIFICAR) {
+      if (!formData.tipoContinuador) {
+        newErrors.tipoContinuador = 'Tipo de Continuador es obligatorio para modificar un instrumento';
       }
     }
 
@@ -167,14 +182,13 @@ const useFormValidation = (formData, mode) => {
 
     // Verificar tipo de instrumento
     const isDerivativeComplete = isDerivative(formData.investmentTypeCode);
+    const isBBGComplete = isBBG(formData.publicDataSource);
+    const isEquityComplete = isEquity(formData.investmentTypeCode);
+    const isFixedIncomeComplete = isFixedIncome(formData.investmentTypeCode);
 
     // En modo nueva/reestructuracion con publicDataSource = BBG, verificar identificador segun tipo
     // NO aplica para derivados
     if (!isDerivativeComplete) {
-      const isBBGComplete = isBBG(formData.publicDataSource);
-      const isEquityComplete = isEquity(formData.investmentTypeCode);
-      const isFixedIncomeComplete = isFixedIncome(formData.investmentTypeCode);
-
       if ((mode === FORM_MODES.NUEVA || mode === FORM_MODES.REESTRUCTURACION) && isBBGComplete) {
         // Para BBG + Equity: requiere tickerBBG
         if (isEquityComplete && !formData.tickerBBG) {
@@ -193,6 +207,18 @@ const useFormValidation = (formData, mode) => {
       if (!formData.subId || ![10000, 20000].includes(subIdValue)) {
         return false;
       }
+    }
+
+    // Verificar yasYldFlag cuando override='True' (Fixed Income + BBG)
+    if (isFixedIncomeComplete && isBBGComplete && formData.override === 'True') {
+      if (!formData.yasYldFlag && formData.yasYldFlag !== 0) {
+        return false;
+      }
+    }
+
+    // Verificar tipoContinuador en modo MODIFICAR
+    if (mode === FORM_MODES.MODIFICAR && !formData.tipoContinuador) {
+      return false;
     }
 
     return true;

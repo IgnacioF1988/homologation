@@ -79,6 +79,15 @@ export const instrumentosService = {
   },
 
   /**
+   * Versiona un instrumento existente (cierra la versión actual y crea una nueva)
+   * Usado para cambios de atributos que requieren tracking histórico
+   */
+  async version(id, moneda, data) {
+    const response = await apiClient.post(`/instrumentos/${id}/${moneda}/version`, data);
+    return response; // Devolver objeto completo
+  },
+
+  /**
    * Elimina un instrumento
    */
   async delete(id, moneda) {

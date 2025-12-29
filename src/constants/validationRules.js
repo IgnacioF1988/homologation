@@ -103,15 +103,16 @@ export const REQUIRED_FIELDS_BY_MODE = {
 
 // ===========================================
 // CAMPOS REQUERIDOS POR TIPO DE INVERSION
-// Usa claves normalizadas (EQ, FI, DE)
+// Usa IDs numéricos del catálogo cat.investmentTypes
 // ===========================================
 export const REQUIRED_FIELDS_BY_INVESTMENT_TYPE = {
-  EQ: ['riskCountry', 'issueCountry'], // Equity requiere paises
-  FI: [], // Fixed Income no requiere paises como campos obligatorios
-  DE: ['subId'], // Derivados requieren SubID
-  FX: [],
-  CO: [],
-  CA: [],
+  1: [], // Fixed Income - no requiere paises como campos obligatorios
+  2: ['riskCountry', 'issueCountry'], // Equity requiere paises
+  3: [], // Cash
+  4: [], // Payable/Receivable
+  5: [], // Bank Debt
+  6: [], // Fund
+  7: ['subId'], // Derivative requiere SubID
 };
 
 // ===========================================

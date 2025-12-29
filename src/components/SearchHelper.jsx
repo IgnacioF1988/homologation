@@ -40,6 +40,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import LinkIcon from '@mui/icons-material/Link';
 import AddLinkIcon from '@mui/icons-material/AddLink';
+import EditIcon from '@mui/icons-material/Edit';
 import { colors } from '../styles/theme';
 import { api } from '../services/api';
 import { isEquity, normalizeInvestmentType } from '../hooks';
@@ -125,9 +126,23 @@ const SearchHelper = ({
   noFormActive = false,
   onSelectExacta,
   onSelectParcial,
+  onModificar,
+  isProcessingQueue = false,
 }) => {
   // Determinar si se puede copiar (solo cuando es instrumento nuevo o no tiene ID)
   const canCopy = formData.esInstrumentoNuevo || !formData.idInstrumento;
+
+  // Determinar visibilidad de opciones según contexto
+  // 1. esInstrumentoNuevo=true: No mostrar ninguna opción
+  // 2. Processing queue item (isProcessingQueue=true): Mostrar Exacta, Parcial, Copiar - NO Modificar
+  // 3. Empty form (no queue, !isProcessingQueue && !noFormActive): SOLO Modificar
+  const isNewInstrument = formData.esInstrumentoNuevo === true;
+  const showExactaParcial = !isNewInstrument && isProcessingQueue;
+  const showCopiar = !isNewInstrument && isProcessingQueue && canCopy;
+  // Mostrar Modificar cuando:
+  // 1. No procesa cola (!isProcessingQueue), O
+  // 2. Procesa cola Y esReestructuracion está marcado (formData.esReestructuracion === 'S')
+  const showModificar = !isNewInstrument && (!isProcessingQueue || formData?.esReestructuracion === 'S') && !noFormActive;
 
   // Estados
   const [isOpen, setIsOpen] = useState(false);
@@ -308,6 +323,20 @@ const SearchHelper = ({
       setIsOpen(false);
     }, 1000);
   }, [selectedInstrument, onSelectParcial]);
+
+  // Handler para modificar instrumento existente (4ta opción)
+  const handleModificar = useCallback(() => {
+    if (!selectedInstrument || !onModificar) return;
+    onModificar(selectedInstrument);
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      setSelectedInstrument(null);
+      setSearchQuery('');
+      setResults([]);
+      setIsOpen(false);
+    }, 1000);
+  }, [selectedInstrument, onModificar]);
 
   // Renderizar valor de campo
   const renderFieldValue = (value) => {
@@ -674,8 +703,17 @@ const SearchHelper = ({
                                 Acciones disponibles:
                               </Typography>
 
-                              {/* Botón Usar como Exacta */}
-                              {onSelectExacta && (
+                              {/* Mensaje cuando es instrumento nuevo (no hay opciones) */}
+                              {isNewInstrument && (
+                                <Box sx={{ p: 1.5, borderRadius: '8px', backgroundColor: colors.warning.bg }}>
+                                  <Typography sx={{ fontSize: '0.7rem', color: colors.warning.dark }}>
+                                    No hay opciones disponibles para instrumentos nuevos.
+                                  </Typography>
+                                </Box>
+                              )}
+
+                              {/* Botón Usar como Exacta - solo cuando procesa cola */}
+                              {showExactaParcial && onSelectExacta && (
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -702,8 +740,8 @@ const SearchHelper = ({
                                 </Button>
                               )}
 
-                              {/* Botón Usar como Parcial */}
-                              {onSelectParcial && (
+                              {/* Botón Usar como Parcial - solo cuando procesa cola */}
+                              {showExactaParcial && onSelectParcial && (
                                 <Button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -730,8 +768,8 @@ const SearchHelper = ({
                                 </Button>
                               )}
 
-                              {/* Botón Copiar Campos - solo para instrumento nuevo */}
-                              {canCopy && onCopyValues && (
+                              {/* Botón Copiar Campos - solo cuando procesa cola con instrumento nuevo */}
+                              {showCopiar && onCopyValues && (
                                 <Tooltip title="Copia los campos pero mantiene el ID auto-generado" placement="top">
                                   <Button
                                     onClick={(e) => {
@@ -760,12 +798,52 @@ const SearchHelper = ({
                                 </Tooltip>
                               )}
 
-                              {/* Texto explicativo */}
+                              {/* Botón Modificar Instrumento - solo cuando NO procesa cola */}
+                              {showModificar && onModificar && (
+                                <Tooltip title="Carga el instrumento para modificar sus atributos" placement="top">
+                                  <Button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleModificar();
+                                    }}
+                                    startIcon={copied ? <CheckCircleOutlineIcon sx={{ fontSize: 16 }} /> : <EditIcon sx={{ fontSize: 16 }} />}
+                                    fullWidth
+                                    sx={{
+                                      background: copied ? colors.success.main : 'linear-gradient(135deg, #9c27b0, #ba68c8)',
+                                      color: '#fff',
+                                      fontWeight: 600,
+                                      fontSize: '0.75rem',
+                                      py: 1,
+                                      borderRadius: '10px',
+                                      textTransform: 'none',
+                                      boxShadow: copied ? 'none' : `0 4px 12px ${alpha('#9c27b0', 0.3)}`,
+                                      '&:hover': !copied ? {
+                                        background: 'linear-gradient(135deg, #7b1fa2, #ab47bc)',
+                                        boxShadow: `0 6px 16px ${alpha('#9c27b0', 0.4)}`,
+                                      } : {},
+                                    }}
+                                  >
+                                    {copied ? '¡Instrumento cargado!' : 'Modificar Instrumento'}
+                                  </Button>
+                                </Tooltip>
+                              )}
+
+                              {/* Texto explicativo contextual */}
                               <Box sx={{ mt: 1, p: 1.5, borderRadius: '8px', backgroundColor: colors.grey[50] }}>
                                 <Typography sx={{ fontSize: '0.65rem', color: colors.text.tertiary, lineHeight: 1.4 }}>
-                                  <strong>Exacta:</strong> Usa este instrumento (ID {instrument.idInstrumento} + Moneda {instrument.moneda})<br />
-                                  <strong>Parcial:</strong> Crea nueva moneda para ID {instrument.idInstrumento}<br />
-                                  {canCopy && <><strong>Copiar:</strong> Solo copia datos, mantiene ID auto-generado</>}
+                                  {showExactaParcial && (
+                                    <>
+                                      <strong>Exacta:</strong> Usa este instrumento (ID {instrument.idInstrumento} + Moneda {instrument.moneda})<br />
+                                      <strong>Parcial:</strong> Crea nueva moneda para ID {instrument.idInstrumento}<br />
+                                    </>
+                                  )}
+                                  {showCopiar && <><strong>Copiar:</strong> Solo copia datos, mantiene ID auto-generado<br /></>}
+                                  {showModificar && (
+                                    <><strong>Modificar:</strong> Carga todos los datos del instrumento para editar atributos. Se creará una nueva versión al guardar.</>
+                                  )}
+                                  {isNewInstrument && (
+                                    <>El instrumento actual es nuevo. Complete los datos manualmente.</>
+                                  )}
                                 </Typography>
                               </Box>
                             </Box>

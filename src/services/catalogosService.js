@@ -52,10 +52,12 @@ async function getCatalogoById(nombre, id) {
  */
 const catalogFieldConfig = {
   paises: { valueField: 'code', labelField: 'ShortName', fallbackLabel: 'Description' },
-  monedas: { valueField: 'nombre', labelField: 'descripcion' },
+  monedas: { valueField: 'id', labelField: 'descripcion' }, // DB expects INT for issueCurrency/riskCurrency
   sectoresGICS: { valueField: 'code', labelField: 'nombre'},
-  dataSources: { valueField: 'codigo', labelField: 'nombre' }, // BBG, MANUAL, etc.
-  investmentTypes: { valueField: 'codigo', labelField: 'nombre' }, // EQ, FI, etc.
+  dataSources: { valueField: 'nombre', labelField: 'nombre' }, // BBG, MANUAL, etc.
+  investmentTypes: { valueField: 'id', labelField: 'nombre' }, // DB expects INT
+  yieldTypes: { valueField: 'code', labelField: 'nombre' }, // YTM, YTC, etc.
+  yieldSources: { valueField: 'nombre', labelField: 'nombre' }, // BBG, MANUAL, etc.
   // Resto usa configuración por defecto (id, nombre)
 };
 

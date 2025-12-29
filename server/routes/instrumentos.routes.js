@@ -683,6 +683,155 @@ router.put('/:id/:moneda', async (req, res) => {
   }
 });
 
+// POST /api/instrumentos/:id/:moneda/version - Versionar instrumento (para cambios de atributos)
+// Cierra la versión actual y crea una nueva con los datos actualizados
+router.post('/:id/:moneda/version', async (req, res) => {
+  const { id, moneda } = req.params;
+  const data = normalizeData(req.body);
+
+  console.log('[POST /instrumentos/version] Versionando instrumento:', id, moneda);
+  console.log('[POST /instrumentos/version] Datos recibidos:', JSON.stringify(data, null, 2));
+
+  try {
+    const pool = await getPool();
+
+    // 1. Obtener el registro actual
+    const currentResult = await pool.request()
+      .input('id', sql.Int, parseInt(id))
+      .input('moneda', sql.Int, parseInt(moneda))
+      .query(`
+        SELECT * FROM stock.instrumentos
+        WHERE idInstrumento = @id AND moneda = @moneda
+        AND Valid_To = '2050-12-31'
+      `);
+
+    if (currentResult.recordset.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `Instrumento con id '${id}' y moneda '${moneda}' no encontrado o ya versionado`,
+      });
+    }
+
+    const currentRecord = currentResult.recordset[0];
+    console.log('[POST /instrumentos/version] Registro actual encontrado');
+
+    // 2. Cerrar la versión actual (Valid_To = ayer)
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    await pool.request()
+      .input('id', sql.Int, parseInt(id))
+      .input('moneda', sql.Int, parseInt(moneda))
+      .input('yesterday', sql.Date, yesterday)
+      .query(`
+        UPDATE stock.instrumentos
+        SET Valid_To = @yesterday
+        WHERE idInstrumento = @id AND moneda = @moneda
+        AND Valid_To = '2050-12-31'
+      `);
+
+    console.log('[POST /instrumentos/version] Versión anterior cerrada');
+
+    // 3. Preparar los datos para la nueva versión
+    const newRecord = { ...currentRecord };
+
+    // Aplicar los cambios del formulario
+    const updateableFields = [
+      'nombreFuente', 'fuente', 'subId',
+      'investmentTypeCode', 'nameInstrumento', 'companyName', 'issuerTypeCode',
+      'sectorGICS', 'issueTypeCode', 'sectorChileTypeCode', 'publicDataSource',
+      'isin', 'tickerBBG', 'sedol', 'cusip',
+      'issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency', 'emisionNacional',
+      'couponTypeCode', 'yieldType', 'yieldSource', 'perpetuidad', 'rendimiento',
+      'couponFrequency', 'coco', 'callable', 'sinkable', 'yasYldFlag', 'override',
+      'rankCode', 'cashTypeCode', 'bankDebtTypeCode', 'fundTypeCode',
+      'esReestructuracion', 'idPredecesor', 'monedaPredecesor', 'tipoContinuador', 'diaValidez',
+      'comentarios'
+    ];
+
+    updateableFields.forEach(field => {
+      if (data[field] !== undefined) {
+        newRecord[field] = data[field];
+      }
+    });
+
+    // 4. Insertar la nueva versión
+    const insertRequest = pool.request();
+    insertRequest.input('idInstrumento', sql.Int, parseInt(id));
+    insertRequest.input('moneda', sql.Int, parseInt(moneda));
+
+    // Campos para la nueva versión
+    const fkFields = [
+      'investmentTypeCode', 'issuerTypeCode', 'issueTypeCode', 'couponTypeCode',
+      'couponFrequency', 'rankCode', 'cashTypeCode', 'bankDebtTypeCode', 'fundTypeCode',
+      'sectorChileTypeCode', 'tipoContinuador', 'issueCurrency', 'riskCurrency',
+      'idPredecesor', 'monedaPredecesor', 'subId'
+    ];
+
+    const insertFields = ['idInstrumento', 'moneda'];
+    const insertValues = ['@idInstrumento', '@moneda'];
+
+    updateableFields.forEach(field => {
+      if (newRecord[field] !== undefined && newRecord[field] !== null) {
+        let value = newRecord[field];
+
+        // Para campos FK, convertir strings vacíos a null
+        if (fkFields.includes(field) && value === '') {
+          return; // Skip empty FK fields
+        }
+
+        insertFields.push(field);
+        insertValues.push(`@${field}`);
+
+        if (fkFields.includes(field)) {
+          insertRequest.input(field, sql.Int, value === '' ? null : (value !== null ? parseInt(value) : null));
+        } else if (field === 'diaValidez') {
+          insertRequest.input(field, sql.Date, value ? new Date(value) : null);
+        } else {
+          insertRequest.input(field, sql.NVarChar, value);
+        }
+      }
+    });
+
+    // Agregar campos de versión y auditoría
+    insertFields.push('fechaCreacion', 'Valid_From', 'Valid_To');
+    insertValues.push('GETDATE()', 'CAST(GETDATE() AS DATE)', "'2050-12-31'");
+
+    const insertQuery = `
+      INSERT INTO stock.instrumentos (${insertFields.join(', ')})
+      VALUES (${insertValues.join(', ')})
+    `;
+
+    console.log('[POST /instrumentos/version] Insert query:', insertQuery);
+    await insertRequest.query(insertQuery);
+
+    console.log('[POST /instrumentos/version] Nueva versión creada');
+
+    // 5. Obtener el registro actualizado
+    const newVersionResult = await pool.request()
+      .input('id', sql.Int, parseInt(id))
+      .input('moneda', sql.Int, parseInt(moneda))
+      .query(`
+        SELECT * FROM stock.instrumentos
+        WHERE idInstrumento = @id AND moneda = @moneda
+        AND Valid_To = '2050-12-31'
+      `);
+
+    res.json({
+      success: true,
+      data: newVersionResult.recordset[0],
+      message: 'Instrumento versionado exitosamente',
+      previousVersionClosedAt: yesterday.toISOString().split('T')[0],
+    });
+  } catch (err) {
+    console.error('Error versionando instrumento:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 // POST /api/instrumentos/bulk-create - Crear múltiples instrumentos
 router.post('/bulk-create', async (req, res) => {
   const { instruments } = req.body;

@@ -15,7 +15,11 @@
  */
 
 import { useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Box, Paper, Alert, Snackbar } from '@mui/material';
+import {
+  Box, Paper, Alert, Snackbar, Dialog, DialogTitle, DialogContent,
+  DialogActions, Button, Table, TableBody, TableCell, TableHead, TableRow,
+  Typography, Chip,
+} from '@mui/material';
 
 // Hooks
 import {
@@ -29,6 +33,7 @@ import {
   useInvestmentTypeConfig,
   useSectionVisibility,
   isDerivative,
+  isFixedIncome,
   useAssetTypeConfig,
 } from '../hooks';
 
@@ -81,6 +86,10 @@ const InstrumentForm = forwardRef(({
   // Estado de UI
   const [saving, setSaving] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
+
+  // Estado para mostrar diff antes de guardar cambios (modo MODIFICAR)
+  const [showDiffDialog, setShowDiffDialog] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState(null);
 
   // Estado de la compania (NEW = crear nueva, SELECTED = existente)
   const [companyState, setCompanyState] = useState(COMPANY_STATES.WRITING);
@@ -249,8 +258,8 @@ const InstrumentForm = forwardRef(({
                                              formData.issueCurrency === formData.moneda;
 
             if (needsIssueCurrencyUpdate && !fieldsToApply.issueCurrency) {
-              fieldsToApply.issueCurrency = monedaRes.data.nombre;
-              trace.defaults(`✅ issueCurrency = ${monedaRes.data.nombre}`);
+              fieldsToApply.issueCurrency = monedaRes.data.id;
+              trace.defaults(`✅ issueCurrency = ${monedaRes.data.id}`);
             }
 
             // Actualizar riskCurrency si está vacío O si es el ID de moneda (pendiente de conversión)
@@ -259,8 +268,8 @@ const InstrumentForm = forwardRef(({
                                             formData.riskCurrency === formData.moneda;
 
             if (needsRiskCurrencyUpdate && !fieldsToApply.riskCurrency) {
-              fieldsToApply.riskCurrency = monedaRes.data.nombre;
-              trace.defaults(`✅ riskCurrency = ${monedaRes.data.nombre}`);
+              fieldsToApply.riskCurrency = monedaRes.data.id;
+              trace.defaults(`✅ riskCurrency = ${monedaRes.data.id}`);
             }
           }
         } catch (apiError) {
@@ -351,6 +360,41 @@ const InstrumentForm = forwardRef(({
     }
   }, [activarReestructuracion, desactivarReestructuracion, sourceInstrument, setFields]);
 
+  // Campos a excluir de la comparación para versioning
+  const EXCLUDED_COMPARISON_FIELDS = [
+    'fuente', 'nombreFuente', 'fechaCreacion', 'fechaModificacion',
+    'usuarioCreacion', 'usuarioModificacion', 'Valid_From', 'Valid_To',
+    'queueItemId', '_isModifying', '_sourceInstrument',
+  ];
+
+  // Comparar datos del formulario con datos originales
+  const compareFormWithOriginal = useCallback((formData, originalData) => {
+    const changes = [];
+
+    Object.keys(formData).forEach(key => {
+      // Excluir campos de comparación
+      if (EXCLUDED_COMPARISON_FIELDS.includes(key)) return;
+      if (key.startsWith('_')) return; // Campos internos
+
+      const formValue = formData[key];
+      const originalValue = originalData[key];
+
+      // Normalizar valores para comparación
+      const normalizedForm = formValue === '' || formValue === null || formValue === undefined ? null : String(formValue);
+      const normalizedOriginal = originalValue === '' || originalValue === null || originalValue === undefined ? null : String(originalValue);
+
+      if (normalizedForm !== normalizedOriginal) {
+        changes.push({
+          field: key,
+          oldValue: originalValue,
+          newValue: formValue,
+        });
+      }
+    });
+
+    return changes;
+  }, []);
+
   // Manejar guardado
   const handleSubmit = useCallback(async () => {
     // Validar formulario
@@ -374,6 +418,31 @@ const InstrumentForm = forwardRef(({
       return;
     }
 
+    // Para modo MODIFICAR, comparar con datos originales y mostrar diff
+    if (mode === 'modificar' && sourceInstrument?._originalData) {
+      const changes = compareFormWithOriginal(formData, sourceInstrument._originalData);
+
+      if (changes.length === 0) {
+        setNotification({
+          open: true,
+          message: 'No hay cambios para guardar',
+          severity: 'info',
+        });
+        return;
+      }
+
+      // Guardar cambios pendientes y mostrar dialog de confirmación
+      setPendingChanges(changes);
+      setShowDiffDialog(true);
+      return;
+    }
+
+    // Continuar con el guardado normal
+    await executeSubmit();
+  }, [formData, mode, sourceInstrument, validateForm, hasDuplicateErrors, compareFormWithOriginal]);
+
+  // Ejecutar el guardado real
+  const executeSubmit = useCallback(async () => {
     setSaving(true);
 
     try {
@@ -382,6 +451,8 @@ const InstrumentForm = forwardRef(({
       // Preparar datos para guardar (excluir metadata de cola)
       const dataToSave = { ...formData };
       delete dataToSave.queueItemId;
+      delete dataToSave._isModifying;
+      delete dataToSave._sourceInstrument;
 
       // Limpiar campos booleanos nchar(1) que no deben enviarse como false/vacío
       // La BD espera 'S' o NULL, no false/empty string
@@ -427,25 +498,56 @@ const InstrumentForm = forwardRef(({
       if (mode === 'exacta' || mode === 'parcial') {
         // Actualizar instrumento existente
         response = await api.instrumentos.update(formData.idInstrumento, dataToSave);
+      } else if (mode === 'modificar') {
+        // Versionar instrumento existente
+        console.log('[handleSubmit] Versionando instrumento:', formData.idInstrumento);
+        response = await api.instrumentos.version(formData.idInstrumento, formData.moneda, dataToSave);
       } else {
-        // Crear nuevo instrumento
-        console.log('[handleSubmit] Creando instrumento con datos:', dataToSave);
-        response = await api.instrumentos.create(dataToSave);
+        // Check if this is BBG Fixed Income from queue - should save to colaPendientes
+        const isBBGFixedIncome = isFixedIncome(dataToSave.investmentTypeCode) &&
+          (dataToSave.yieldSource === 'BBG' || dataToSave.yieldSource === 'Bloomberg');
+
+        if (isBBGFixedIncome && queueItemId) {
+          // Save to colaPendientes with datosOrigen, mark as completado
+          // The SP will later move it to stock.instrumentos after BBG enrichment
+          console.log('[handleSubmit] BBG Fixed Income - saving to colaPendientes');
+          response = await api.colaPendientes.update(queueItemId, {
+            datosOrigen: dataToSave,
+            estado: 'completado',
+            idInstrumentoOrigen: dataToSave.idInstrumento,
+          });
+        } else {
+          // Normal flow: create directly in stock.instrumentos
+          console.log('[handleSubmit] Creando instrumento con datos:', dataToSave);
+          response = await api.instrumentos.create(dataToSave);
+        }
       }
 
       if (response.success) {
-        // Marcar item de cola como completado
-        if (queueItemId) {
+        // For non-BBG instruments from queue, mark as completado
+        // (BBG Fixed Income already marked completado above)
+        const isBBGFixedIncomeFromQueue = isFixedIncome(dataToSave.investmentTypeCode) &&
+          (dataToSave.yieldSource === 'BBG' || dataToSave.yieldSource === 'Bloomberg') && queueItemId;
+
+        if (queueItemId && !isBBGFixedIncomeFromQueue) {
           await api.colaPendientes.updateEstado(queueItemId, 'completado');
         }
 
+        const successMessage = mode === 'modificar'
+          ? 'Instrumento versionado exitosamente. Se creó una nueva versión.'
+          : mode === 'exacta' || mode === 'parcial'
+            ? 'Instrumento actualizado exitosamente'
+            : 'Instrumento creado exitosamente';
+
         setNotification({
           open: true,
-          message: mode === 'exacta' || mode === 'parcial'
-            ? 'Instrumento actualizado exitosamente'
-            : 'Instrumento creado exitosamente',
+          message: successMessage,
           severity: 'success',
         });
+
+        // Limpiar estado de modificación
+        setPendingChanges(null);
+        setShowDiffDialog(false);
 
         // Callback de exito
         if (onSaveSuccess) {
@@ -468,7 +570,19 @@ const InstrumentForm = forwardRef(({
     } finally {
       setSaving(false);
     }
-  }, [formData, mode, companyState, validateForm, hasDuplicateErrors, queueItemId, onSaveSuccess]);
+  }, [formData, mode, companyState, queueItemId, onSaveSuccess]);
+
+  // Confirmar cambios desde el dialog de diff
+  const handleConfirmChanges = useCallback(() => {
+    setShowDiffDialog(false);
+    executeSubmit();
+  }, [executeSubmit]);
+
+  // Cancelar cambios desde el dialog de diff
+  const handleCancelChanges = useCallback(() => {
+    setShowDiffDialog(false);
+    setPendingChanges(null);
+  }, []);
 
   // Manejar reset
   const handleReset = useCallback(() => {
@@ -567,14 +681,97 @@ const InstrumentForm = forwardRef(({
     });
   }, [setMode, setFormData]);
 
+  // Manejar MODIFICAR instrumento existente (4ta opción desde SearchHelper)
+  // Carga todos los datos del instrumento para modificar atributos
+  // Auto-activa esReestructuracion y requiere tipoContinuador
+  const handleModificar = useCallback(async (instrument) => {
+    console.log('handleModificar llamado con instrumento:', instrument);
+
+    // Establecer modo MODIFICAR (similar a reestructuracion pero para cambios de atributos)
+    setMode('modificar');
+
+    // Heredar todos los campos del instrumento seleccionado
+    const mappedFields = mapRegistroCompleto(instrument);
+
+    // Guardar referencia al instrumento original para comparación al guardar
+    setSourceInstrument({
+      idInstrumento: instrument.idInstrumento,
+      moneda: instrument.moneda,
+      nameInstrumento: instrument.nameInstrumento,
+      // Guardar todos los campos originales para comparación
+      _originalData: { ...instrument },
+    });
+
+    // Moneda: el dropdown usa ID como value (el label muestra el nombre pero el value es el ID)
+    // No necesitamos conversión, solo pasar el ID directamente
+    const monedaId = instrument.moneda ? String(instrument.moneda) : '';
+    console.log('handleModificar - Moneda ID:', monedaId);
+
+    // Convertir fuente texto a ID (fuentes dropdown usa id como value, pero instrumento guarda texto)
+    // Ej: instrument.fuente = 'BBG' -> buscar option con label 'BBG' -> value = 1
+    let fuenteValue = '';
+    if (instrument.fuente && options?.fuentes) {
+      // Buscar por label (nombre en la BD) ya que el instrumento guarda el texto
+      const fuenteOption = options.fuentes.find(f =>
+        f.label === instrument.fuente || String(f.value) === String(instrument.fuente)
+      );
+      if (fuenteOption) {
+        fuenteValue = String(fuenteOption.value);
+      }
+      console.log('handleModificar - Conversión fuente:', {
+        fuenteOriginal: instrument.fuente,
+        fuenteValue,
+        foundOption: fuenteOption,
+        availableOptions: options.fuentes,
+      });
+    }
+
+    // Actualizar formData con todos los campos heredados
+    setFormData(prev => {
+      // Usar valores convertidos, o fallback a valores previos (de la cola)
+      const nombreFuente = instrument.nombreFuente || prev.nombreFuente || '';
+      const fuente = fuenteValue || prev.fuente || '';
+      const moneda = monedaId || prev.moneda || '';
+
+      console.log('handleModificar - Valores finales:', { nombreFuente, fuente, moneda });
+
+      return {
+        ...prev,
+        idInstrumento: String(instrument.idInstrumento),
+        // Copiar campos fuente (con valores convertidos)
+        nombreFuente,
+        fuente,
+        moneda,
+        // Copiar todos los demás campos
+        ...mappedFields,
+        esReestructuracion: 'S', // Auto-activar
+        // Auto-llenar campos de predecesor desde el instrumento original
+        idPredecesor: String(instrument.idInstrumento),
+        monedaPredecesor: instrument.moneda ? String(instrument.moneda) : '',
+        subId: instrument.subId ? String(instrument.subId) : '',
+        // Limpiar tipoContinuador para que el usuario lo seleccione
+        tipoContinuador: '',
+        // Marcar como instrumento en modificación (no nuevo)
+        _isModifying: true,
+      };
+    });
+
+    setNotification({
+      open: true,
+      message: `Instrumento "${instrument.nameInstrumento}" cargado para modificación. Seleccione el Tipo de Continuador y realice los cambios necesarios.`,
+      severity: 'info',
+    });
+  }, [setMode, setFormData, options]);
+
   // Exponer métodos y datos para el SearchHelper a nivel de página
   useImperativeHandle(ref, () => ({
     handleCopyFromSearch,
     handleSelectExacta,
     handleSelectParcial,
+    handleModificar,
     formData,
     saving,
-  }), [handleCopyFromSearch, handleSelectExacta, handleSelectParcial, formData, saving]);
+  }), [handleCopyFromSearch, handleSelectExacta, handleSelectParcial, handleModificar, formData, saving]);
 
   // Cerrar notificacion
   const handleCloseNotification = useCallback(() => {
@@ -623,6 +820,7 @@ const InstrumentForm = forwardRef(({
               predecesorError={predecesorError}
               getInstrumentosExistentes={getInstrumentosExistentes}
               options={options}
+              mode={mode}
             />
           )}
 
@@ -735,6 +933,88 @@ const InstrumentForm = forwardRef(({
           {notification.message}
         </Alert>
       </Snackbar>
+
+      {/* Dialog de confirmación de cambios (modo MODIFICAR) */}
+      <Dialog
+        open={showDiffDialog}
+        onClose={handleCancelChanges}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Typography variant="h6" component="span">
+            Confirmar Cambios
+          </Typography>
+          <Chip
+            label={`${pendingChanges?.length || 0} cambios`}
+            color="primary"
+            size="small"
+          />
+        </DialogTitle>
+        <DialogContent dividers>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Se creará una nueva versión del instrumento con los siguientes cambios.
+            La versión anterior quedará cerrada con fecha de ayer.
+          </Alert>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600 }}>Campo</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Valor Anterior</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>Valor Nuevo</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {pendingChanges?.map((change, index) => (
+                <TableRow key={index}>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {change.field}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'error.main',
+                        textDecoration: change.oldValue ? 'line-through' : 'none',
+                        fontStyle: change.oldValue ? 'normal' : 'italic',
+                      }}
+                    >
+                      {change.oldValue || '(vacío)'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'success.main',
+                        fontWeight: 500,
+                        fontStyle: change.newValue ? 'normal' : 'italic',
+                      }}
+                    >
+                      {change.newValue || '(vacío)'}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={handleCancelChanges} color="inherit">
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleConfirmChanges}
+            variant="contained"
+            color="primary"
+            disabled={saving}
+          >
+            {saving ? 'Guardando...' : 'Confirmar y Guardar'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
     </Box>
   );

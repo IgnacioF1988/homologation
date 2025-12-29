@@ -10,6 +10,7 @@ export const FORM_MODES = {
   PARCIAL: 'parcial',
   NUEVA: 'nueva',
   REESTRUCTURACION: 'reestructuracion',
+  MODIFICAR: 'modificar', // Modificar instrumento existente (cambio de atributos)
 };
 
 // IDs de Investment Types (cat.investmentTypes)

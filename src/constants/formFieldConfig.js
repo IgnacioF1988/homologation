@@ -54,7 +54,7 @@ export const FIELD_GROUPS = {
   fiParameters: ['couponTypeCode', 'yieldType', 'yieldSource', 'perpetuidad', 'rendimiento', 'couponFrequency'],
 
   // Campos BBG
-  bbgFields: ['coco', 'callable', 'sinkable', 'yasYldFlag'],
+  bbgFields: ['coco', 'callable', 'sinkable', 'override', 'yasYldFlag'],
 
   // Otros tipos
   otherTypes: ['rankCode', 'cashTypeCode', 'bankDebtTypeCode', 'fundTypeCode'],
@@ -136,6 +136,28 @@ export const MODE_FIELD_CONFIG = {
     description: 'Reestructuracion. El ID se asigna automaticamente. Busque el predecesor.',
     color: 'secondary',
     label: 'Reestructuracion',
+  },
+
+  [FORM_MODES.MODIFICAR]: {
+    editable: [
+      'esReestructuracion',
+      'tipoContinuador', // Requerido para modificaciones
+      'diaValidez', // Fecha de validez editable
+      'moneda', // Moneda es editable en modo MODIFICAR
+      'nameInstrumento', 'publicDataSource',
+      ...FIELD_GROUPS.identifiers,
+      ...FIELD_GROUPS.company,
+      ...FIELD_GROUPS.classification,
+      ...FIELD_GROUPS.geography,
+      ...FIELD_GROUPS.fiParameters,
+      ...FIELD_GROUPS.bbgFields,
+      ...FIELD_GROUPS.otherTypes,
+      'comentarios',
+    ],
+    readonly: [...SOURCE_FIELDS, 'idInstrumento'], // Solo ID es readonly
+    description: 'Modificar instrumento existente. Seleccione el Tipo de Continuador y realice los cambios.',
+    color: 'primary',
+    label: 'Modificar Instrumento',
   },
 };
 

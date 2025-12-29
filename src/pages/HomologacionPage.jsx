@@ -20,7 +20,7 @@ import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 
 import InstrumentForm from '../components/InstrumentForm';
-import PipelineExecution from '../components/PipelineExecution';
+import PipelineExecution from '../components/PipelineV2';
 import WorkQueue from '../components/WorkQueue';
 import SearchHelper from '../components/SearchHelper';
 import { DimensionalExplorer, DimensionalExplorerFab } from '../components/DimensionalExplorer';
@@ -344,9 +344,31 @@ const HomologacionPage = () => {
     }
   }, [activeFormRef]);
 
+  // Handler para MODIFICAR instrumento existente (4ta opción)
+  const handleModificar = useCallback((instrument) => {
+    // Si estamos en tab 0 sin item seleccionado, cambiar a tab 1
+    if (activeTab === 0 && !selectedItem) {
+      setActiveTab(1);
+      // Esperar a que el tab cambie y luego cargar el instrumento
+      setTimeout(() => {
+        if (newFormRef?.current?.handleModificar) {
+          newFormRef.current.handleModificar(instrument);
+        }
+      }, 100);
+    } else if (activeTab === 1) {
+      // Ya estamos en tab 1, cargar directamente
+      if (newFormRef?.current?.handleModificar) {
+        newFormRef.current.handleModificar(instrument);
+      }
+    }
+  }, [activeTab, selectedItem]);
+
   // Datos del formulario activo para SearchHelper
   const activeFormData = activeFormRef?.current?.formData || {};
   const isFormSaving = activeFormRef?.current?.saving || false;
+
+  // Determinar si se está procesando un item de la cola
+  const isProcessingQueue = activeTab === 0 && selectedItem !== null;
 
   return (
     <Box
@@ -498,9 +520,11 @@ const HomologacionPage = () => {
           onCopyValues={handleCopyFromSearch}
           onSelectExacta={handleSelectExacta}
           onSelectParcial={handleSelectParcial}
+          onModificar={handleModificar}
           disabled={isFormSaving}
           formData={activeFormData}
-          noFormActive={activeTab === 0 && !selectedItem}
+          noFormActive={false}
+          isProcessingQueue={isProcessingQueue}
         />
       </Box>
 

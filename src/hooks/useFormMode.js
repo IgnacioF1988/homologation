@@ -215,7 +215,7 @@ const useFormMode = (initialMode = null, formData = {}, fieldConfig = null) => {
 
   // Verificar si es un modo de edicion (vs creacion)
   const isEditMode = useMemo(() => {
-    return mode === FORM_MODES.EXACTA || mode === FORM_MODES.PARCIAL;
+    return mode === FORM_MODES.EXACTA || mode === FORM_MODES.PARCIAL || mode === FORM_MODES.MODIFICAR;
   }, [mode]);
 
   // Verificar si es modo de solo confirmacion
@@ -230,6 +230,7 @@ const useFormMode = (initialMode = null, formData = {}, fieldConfig = null) => {
       [FORM_MODES.PARCIAL]: 'warning',
       [FORM_MODES.NUEVA]: 'info',
       [FORM_MODES.REESTRUCTURACION]: 'secondary',
+      [FORM_MODES.MODIFICAR]: 'primary',
     };
     return colors[mode] || 'default';
   }, [mode]);
@@ -241,6 +242,7 @@ const useFormMode = (initialMode = null, formData = {}, fieldConfig = null) => {
       [FORM_MODES.PARCIAL]: 'Coincidencia Parcial',
       [FORM_MODES.NUEVA]: 'Nuevo Instrumento',
       [FORM_MODES.REESTRUCTURACION]: 'Reestructuracion',
+      [FORM_MODES.MODIFICAR]: 'Modificar Instrumento',
     };
     return labels[mode] || 'Sin modo';
   }, [mode]);

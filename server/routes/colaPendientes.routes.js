@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getPool, sql } = require('../config/database');
+const { getPoolHomologacion, sql } = require('../config/database');
 
 // GET /api/cola-pendientes - Pendientes con paginación
 // Query params: estado, resetEnProceso, page (default 1), limit (default 100, max 500)
@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Si se pide reset, primero resetear los en_proceso a pendiente
     // EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
 // EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
 router.post('/reset-en-proceso', async (req, res) => {
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Contar cuántos hay en_proceso antes del reset (excluding BBG)
     const countBefore = await pool.request().query(`
@@ -113,7 +113,7 @@ router.post('/reset-en-proceso', async (req, res) => {
 // GET /api/cola-pendientes/stats - Estadísticas por estado
 router.get('/stats', async (req, res) => {
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Obtener conteo por estado
     const result = await pool.request().query(`
@@ -164,7 +164,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
     const result = await pool.request()
       .input('id', sql.Int, parseInt(id))
       .query('SELECT * FROM sandbox.colaPendientes WHERE id = @id');
@@ -209,7 +209,7 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     const result = await pool.request()
       .input('idInstrumentoOrigen', sql.NVarChar, idInstrumentoOrigen || null)
@@ -254,7 +254,7 @@ router.patch('/:id/estado', async (req, res) => {
   }
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Verificar que existe
     const exists = await pool.request()
@@ -321,7 +321,7 @@ router.put('/:id', async (req, res) => {
   } = req.body;
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Verificar que existe
     const exists = await pool.request()
@@ -411,7 +411,7 @@ router.delete('/:id', async (req, res) => {
   const { hardDelete = false } = req.query;
 
   try {
-    const pool = await getPool();
+    const pool = await getPoolHomologacion();
 
     // Verificar que existe
     const exists = await pool.request()

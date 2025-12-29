@@ -255,7 +255,7 @@ export const FIXED_INCOME_CONFIG = {
         {
           id: 'bbgFields',
           visibleWhen: { field: 'yieldSource', equals: '1' },
-          fields: ['coco', 'callable', 'sinkable', 'yasYldFlag'],
+          fields: ['coco', 'callable', 'sinkable', 'override', 'yasYldFlag'],
           alertMessage: 'Complete los campos Bloomberg:',
         },
       ],
@@ -337,10 +337,20 @@ export const FIXED_INCOME_CONFIG = {
           optionsKey: 'booleanValues',
         },
 
+        override: {
+          name: 'override',
+          label: 'Override',
+          type: 'select',
+          optionsKey: 'trueFalseValues',
+          cascade: ['yasYldFlag'],
+          cascadeCondition: { equals: 'False' },
+        },
+
         yasYldFlag: {
           name: 'yasYldFlag',
           label: 'YAS_YLD_FLAG',
           type: 'number',
+          requiredWhen: { field: 'override', equals: 'True' },
         },
       },
 
