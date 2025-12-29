@@ -23,44 +23,39 @@ global:
 # ============================================
 services:
   # ============================================
-  # FASE 0: EXTRACCION (Parallel per-fund)
+  # FASE 0: EXTRACCION (Batch Hybrid - procesa todos los fondos de una vez)
   # ============================================
   - id: EXTRACCION
     name: "Extracción de Datos"
-    type: parallel                   # Ejecuta por fondo individual (per-fund isolation)
+    type: batch                      # Ejecuta batch grupal con tagging de ID_Ejecucion
     dependencies: []                 # Sin dependencias previas (primer paso)
-    maxConcurrent: 5                 # Hasta 5 fondos extrayendo en paralelo (optimizado para reducir contención SQL)
     spList:
-      - name: extract.Extract_IPA
+      - name: extract.Extract_IPA_Batch
         order: 1
-        parallel: true               # Puede ejecutarse en paralelo con otros extractores
-        timeout: 60000               # 60 segundos (con 20 fondos en paralelo, cada SP puede tardar más)
-      - name: extract.Extract_PosModRF
-        order: 1
-        parallel: true
-        timeout: 60000
-      - name: extract.Extract_SONA
-        order: 1
-        parallel: true
-        timeout: 60000
-      - name: extract.Extract_CAPM
-        order: 1
-        parallel: true
-        timeout: 60000
-      - name: extract.Extract_Derivados
-        order: 1
-        parallel: true
-        timeout: 60000
-      - name: extract.Extract_UBS
-        order: 1
-        parallel: true
-        timeout: 60000
-      - name: extract.Extract_UBS_MonedaDerivados
-        order: 2                     # Depende de Extract_UBS
-        parallel: false
+        timeout: 120000              # 120 segundos para procesar todos los fondos
+      - name: extract.Extract_PosModRF_Batch
+        order: 2
+        timeout: 120000
+      - name: extract.Extract_SONA_Batch
+        order: 3
+        timeout: 120000
+      - name: extract.Extract_CAPM_Batch
+        order: 4
+        timeout: 120000
+      - name: extract.Extract_Derivados_Batch
+        order: 5                     # Después de IPA (requiere validación)
+        timeout: 120000
+      - name: extract.Extract_PNL_Batch
+        order: 6
+        timeout: 120000
+      - name: extract.Extract_UBS_Batch
+        order: 7
+        timeout: 120000
+      - name: extract.Extract_UBS_MonedaDerivados_Batch
+        order: 8                     # Después de Extract_UBS
         timeout: 120000
       - name: extract.Extract_UBS_Patrimonio
-        order: 2                     # Depende de Extract_UBS
+        order: 9                     # Mantiene el per-fund original (caso especial)
         parallel: false
         timeout: 120000
     onError: STOP_ALL                # Error en extracción detiene toda la ejecución
@@ -113,36 +108,77 @@ services:
         order: 2
         parallel: false
         timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         tracking:
           subStateField: Estado_IPA_02_AjusteSONA
       - name: staging.IPA_03_RenombrarCxCCxP_v2
         order: 3
         parallel: false
         timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         tracking:
           subStateField: Estado_IPA_03_RenombrarCxCCxP
       - name: staging.IPA_04_TratamientoSuciedades_v2
         order: 4
         parallel: false
         timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         tracking:
           subStateField: Estado_IPA_04_TratamientoSuciedades
       - name: staging.IPA_05_EliminarCajasMTM_v2
         order: 5
         parallel: false
         timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         tracking:
           subStateField: Estado_IPA_05_EliminarCajasMTM
       - name: staging.IPA_06_CrearDimensiones_v2
         order: 6
         parallel: false
         timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         tracking:
           subStateField: Estado_IPA_06_CrearDimensiones
-      - name: staging.IPA_07_AgruparRegistros_v2
+      - name: staging.IPA_06B_PopulateIPACash_v2
         order: 7
         parallel: false
+        timeout: 120000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
+        tracking:
+          subStateField: Estado_IPA_06B_PopulateIPACash
+      - name: staging.IPA_07_AgruparRegistros_v2
+        order: 8
+        parallel: false
         timeout: 180000
+        inputFields:
+          - ID_Ejecucion
+          - FechaReporte
+          - ID_Fund
+          - Portfolio_Geneva
         validation:
           checkRowCount: true
           minRows: 1

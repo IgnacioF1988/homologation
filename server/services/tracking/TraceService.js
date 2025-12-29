@@ -59,14 +59,15 @@ class TraceService {
    * @param {string} etapa - Nombre del servicio (ej: 'IPA', 'CAPM')
    * @param {string} recurso - Nombre del recurso (ej: 'staging.IPA_WorkTable')
    * @param {object} metadata - Contexto adicional (portfolio, etc.)
+   * @param {string} subEtapa - Sub-paso del servicio (ej: 'IPA_01', 'CAPM_01', opcional)
    */
-  async recordStart(idProceso, idEjecucion, idFund, etapa, recurso, metadata = {}) {
+  async recordStart(idProceso, idEjecucion, idFund, etapa, recurso, metadata = {}, subEtapa = null) {
     return this._record({
       ID_Proceso: idProceso,
       ID_Ejecucion: idEjecucion,
       ID_Fund: idFund,
       Etapa: etapa,
-      SubEtapa: null,
+      SubEtapa: subEtapa,
       Tipo_Evento: 'START',
       Recurso: recurso,
       Duracion_Ms: 0,
@@ -84,14 +85,15 @@ class TraceService {
    * @param {string} recurso - Nombre del recurso
    * @param {number} duracionMs - Duración de ejecución en milisegundos
    * @param {object} metadata - Contexto adicional (registros afectados, etc.)
+   * @param {string} subEtapa - Sub-paso del servicio (ej: 'IPA_01', 'CAPM_01', opcional)
    */
-  async recordEnd(idProceso, idEjecucion, idFund, etapa, recurso, duracionMs, metadata = {}) {
+  async recordEnd(idProceso, idEjecucion, idFund, etapa, recurso, duracionMs, metadata = {}, subEtapa = null) {
     return this._record({
       ID_Proceso: idProceso,
       ID_Ejecucion: idEjecucion,
       ID_Fund: idFund,
       Etapa: etapa,
-      SubEtapa: null,
+      SubEtapa: subEtapa,
       Tipo_Evento: 'END',
       Recurso: recurso,
       Duracion_Ms: duracionMs,
@@ -131,14 +133,15 @@ class TraceService {
    * @param {string} etapa - Nombre del servicio donde ocurrió el error
    * @param {string} errorMessage - Mensaje de error
    * @param {object} metadata - Contexto adicional del error
+   * @param {string} subEtapa - Sub-paso del servicio donde ocurrió el error (opcional)
    */
-  async recordError(idProceso, idEjecucion, idFund, etapa, errorMessage, metadata = {}) {
+  async recordError(idProceso, idEjecucion, idFund, etapa, errorMessage, metadata = {}, subEtapa = null) {
     return this._record({
       ID_Proceso: idProceso,
       ID_Ejecucion: idEjecucion,
       ID_Fund: idFund,
       Etapa: etapa,
-      SubEtapa: null,
+      SubEtapa: subEtapa,
       Tipo_Evento: 'ERROR',
       Recurso: null,
       Duracion_Ms: 0,
@@ -176,6 +179,10 @@ class TraceService {
    * @private
    */
   async _record(traceRecord) {
+    // Agregar timestamp en el momento preciso que ocurre el evento
+    // No depender del DEFAULT GETDATE() de SQL Server para tener precisión
+    traceRecord.Timestamp = new Date();
+
     this.buffer.push(traceRecord);
 
     // Auto-flush cuando el buffer alcanza el umbral
@@ -202,6 +209,7 @@ class TraceService {
       table.columns.add('ID_Proceso', sql.BigInt, { nullable: false });
       table.columns.add('ID_Ejecucion', sql.BigInt, { nullable: false });
       table.columns.add('ID_Fund', sql.Int, { nullable: true });
+      table.columns.add('Timestamp', sql.DateTime, { nullable: false }); // Agregado: timestamp preciso
       table.columns.add('Etapa', sql.NVarChar(50), { nullable: true });
       table.columns.add('SubEtapa', sql.NVarChar(50), { nullable: true });
       table.columns.add('Tipo_Evento', sql.NVarChar(20), { nullable: false });
@@ -215,6 +223,7 @@ class TraceService {
           record.ID_Proceso,
           record.ID_Ejecucion,
           record.ID_Fund,
+          record.Timestamp, // Agregado: timestamp preciso del evento
           record.Etapa,
           record.SubEtapa,
           record.Tipo_Evento,

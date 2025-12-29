@@ -92,6 +92,9 @@ class FundOrchestrator {
     this.serviceInstances = new Map();
     this.executionPlan = null; // Array of phases [{services, type, name}]
     this.extractionTagged = false; // Flag para ejecutar tagging solo una vez
+
+    // Conexión SQL dedicada para este fondo (mantiene ##tablas_temporales vivas)
+    this.dedicatedConnection = null;
   }
 
   /**
@@ -103,25 +106,36 @@ class FundOrchestrator {
   async initialize() {
     console.log(`[FundOrchestrator ${this.idEjecucion}] Inicializando...`);
 
-    // 1. Cargar pipeline.config.yaml
+    // 1. Crear conexión SQL dedicada para este fondo
+    // CRÍTICO: Esta conexión se mantiene abierta durante TODO el pipeline
+    // para que las tablas ##temporales_globales persistan
+    try {
+      this.dedicatedConnection = await this.pool.connect();
+      console.log(`[FundOrchestrator ${this.idEjecucion}] ✓ Conexión SQL dedicada creada`);
+    } catch (error) {
+      console.error(`[FundOrchestrator ${this.idEjecucion}] Error creando conexión dedicada:`, error);
+      throw error;
+    }
+
+    // 2. Cargar pipeline.config.yaml
     const configPath = path.join(__dirname, '../../config/pipeline.config.yaml');
     const configFile = fs.readFileSync(configPath, 'utf8');
     this.config = yaml.load(configFile);
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Config cargado: ${this.config.services.length} servicios`);
 
-    // 2. Resolver dependencias usando DependencyResolver
+    // 3. Resolver dependencias usando DependencyResolver
     const resolver = new DependencyResolver(this.config.services);
     const executionOrder = resolver.getExecutionOrder(); // Array de IDs en orden topológico
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Orden de ejecución: ${executionOrder.join(' -> ')}`);
 
-    // 3. Agrupar servicios por tipo de ejecución (batch, parallel, sequential)
+    // 4. Agrupar servicios por tipo de ejecución (batch, parallel, sequential)
     this.executionPlan = this._buildExecutionPlan(executionOrder);
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Plan de ejecución: ${this.executionPlan.length} fases`);
 
-    // 4. Instanciar servicios (IPAService, CAPMService, etc.)
+    // 5. Instanciar servicios (IPAService, CAPMService, etc.)
     this._instantiateServices();
 
     console.log(`[FundOrchestrator ${this.idEjecucion}] Inicializado con ${this.fondos.length} fondos`);
@@ -208,12 +222,13 @@ class FundOrchestrator {
     };
 
     // Instanciar cada servicio con su config
+    // IMPORTANTE: Pasar dedicatedConnection en lugar de pool para mantener ##temp tables
     this.config.services.forEach(svcConfig => {
       const ServiceClass = serviceClasses[svcConfig.id];
       if (ServiceClass) {
         this.serviceInstances.set(
           svcConfig.id,
-          new ServiceClass(svcConfig, this.pool, this.tracker, this.logger, this.trace)
+          new ServiceClass(svcConfig, this.dedicatedConnection, this.tracker, this.logger, this.trace)
         );
         console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio instanciado: ${svcConfig.id}`);
       } else {
@@ -284,6 +299,9 @@ class FundOrchestrator {
         console.log(`[FundOrchestrator ${this.idEjecucion}] Trace records flushed (buffer: ${this.trace.getBufferSize()})`);
       }
 
+      // NO cerrar conexión aquí - se cerrará externamente después de actualizar stats globales
+      // Esto evita errores de "Connection is closed" al actualizar estadísticas del proceso
+
       return { success: true, idEjecucion: this.idEjecucion };
 
     } catch (error) {
@@ -306,7 +324,27 @@ class FundOrchestrator {
         }
       }
 
+      // NO cerrar conexión aquí - se cerrará externamente después de actualizar stats globales
+      // Esto evita errores de "Connection is closed" al actualizar estadísticas del proceso
+
       throw error;
+    }
+  }
+
+  /**
+   * Cerrar conexión dedicada y limpiar recursos
+   * DEBE llamarse externamente después de que todas las operaciones del proceso hayan completado
+   * (incluyendo actualización de estadísticas globales)
+   */
+  async close() {
+    if (this.dedicatedConnection) {
+      try {
+        await this.dedicatedConnection.close();
+        console.log(`[FundOrchestrator ${this.idEjecucion}] ✓ Conexión SQL dedicada cerrada (##temp tables eliminadas)`);
+      } catch (closeError) {
+        console.warn(`[FundOrchestrator ${this.idEjecucion}] Warning cerrando conexión dedicada:`, closeError.message);
+      }
+      this.dedicatedConnection = null;
     }
   }
 

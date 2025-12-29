@@ -67,7 +67,8 @@
       "Bash(timeout 120 node:*)",
       "Bash(tee:*)",
       "Bash(where:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

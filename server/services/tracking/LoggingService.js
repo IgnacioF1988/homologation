@@ -75,7 +75,16 @@ class LoggingService {
     this.flushInterval = setInterval(() => {
       if (this.buffer.length > 0) {
         this.flush().catch(err => {
-          console.error('[LoggingService] Error en auto-flush:', err);
+          // Si es un error de conexión cerrada, detener auto-flush para evitar spam
+          if (err.code === 'ECONNCLOSED' || (err.message && err.message.includes('Connection is closed'))) {
+            console.warn('[LoggingService] Conexión cerrada - deteniendo auto-flush');
+            if (this.flushInterval) {
+              clearInterval(this.flushInterval);
+              this.flushInterval = null;
+            }
+          } else {
+            console.error('[LoggingService] Error en auto-flush:', err);
+          }
         });
       }
     }, this.flushIntervalMs);

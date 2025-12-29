@@ -1,0 +1,136 @@
+-- =============================================
+-- Migration 030: Derivados_Batch con validación de columnas
+-- Verifica que las columnas existen antes de crear el SP
+-- =============================================
+
+-- Primero verificar que las columnas existen
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = 'extract'
+    AND TABLE_NAME = 'Derivados'
+    AND COLUMN_NAME = 'ID_Proceso'
+)
+BEGIN
+    PRINT 'ERROR: Columna ID_Proceso no existe en extract.Derivados';
+    RAISERROR('Columna ID_Proceso no existe', 16, 1);
+END
+GO
+
+-- Eliminar SP existente
+IF OBJECT_ID('extract.Extract_Derivados_Batch', 'P') IS NOT NULL
+    DROP PROCEDURE [extract].[Extract_Derivados_Batch];
+GO
+
+-- Crear SP con nombres de columnas totalmente calificados
+CREATE PROCEDURE [extract].[Extract_Derivados_Batch]
+    @ID_Proceso BIGINT,
+    @FechaReporte NVARCHAR(10)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @RowsInserted INT = 0;
+    DECLARE @StartTime DATETIME = GETDATE();
+
+    PRINT 'EXTRACT_DERIVADOS_BATCH - INICIO - Fecha: ' + @FechaReporte;
+
+    BEGIN TRY
+        IF @FechaReporte IS NULL OR ISDATE(@FechaReporte) = 0
+        BEGIN
+            PRINT 'Extract_Derivados_Batch ERROR: Fecha inválida';
+            RETURN -1;
+        END
+
+        BEGIN TRANSACTION;
+
+        -- Tabla temporal
+        DROP TABLE IF EXISTS #TempDerivados;
+
+        CREATE TABLE #TempDerivados (
+            [FechaReporte] NVARCHAR(10),
+            [Portfolio] NVARCHAR(255),
+            [InvestID] NVARCHAR(255),
+            [Tipo_Derivado] NVARCHAR(255),
+            [Moneda_PLarga] NVARCHAR(10),
+            [Moneda_PCorta] NVARCHAR(10),
+            [Notional_Vig_PLarga_Local] FLOAT,
+            [Notional_Vig_PCorta_Local] FLOAT,
+            [VP_PLarga_Base] FLOAT,
+            [VP_PCorta_Base] FLOAT,
+            [MTM_Sistema] FLOAT,
+            [ID_Ejecucion] BIGINT,
+            [ID_Fund] INT,
+            [ID_Proceso] BIGINT
+        );
+
+        -- Insertar en temp
+        INSERT INTO #TempDerivados
+        SELECT
+            d.[FechaReporte],
+            CASE WHEN d.[Portfolio] = 'MUCC II' THEN 'MLCC_Geneva' ELSE d.[Portfolio] END,
+            d.[ID_Derivado],
+            d.[Tipo_Derivado],
+            d.[Moneda_PLarga],
+            d.[Moneda_PCorta],
+            d.[Notional_Vig_PLarga_Local],
+            d.[Notional_Vig_PCorta_Local],
+            d.[VP_PLarga_Base],
+            d.[VP_PCorta_Base],
+            d.[MTM_Sistema],
+            e.[ID_Ejecucion],
+            ef.[ID_Fund],
+            @ID_Proceso
+        FROM [Inteligencia_Producto].[dbo].[TBL_DERIVADOS_INTELIGENCIA] d WITH (NOLOCK)
+        INNER JOIN [logs].[Ejecuciones] e WITH (NOLOCK) ON e.[ID_Proceso] = @ID_Proceso
+        INNER JOIN [logs].[Ejecucion_Fondos] ef WITH (NOLOCK)
+            ON ef.[ID_Ejecucion] = e.[ID_Ejecucion]
+            AND (d.[Portfolio] COLLATE DATABASE_DEFAULT = ef.[Portfolio_Derivados] COLLATE DATABASE_DEFAULT
+                 OR (d.[Portfolio] COLLATE DATABASE_DEFAULT = 'MUCC II' COLLATE DATABASE_DEFAULT
+                     AND ef.[Portfolio_Derivados] COLLATE DATABASE_DEFAULT = 'MLCC_Geneva' COLLATE DATABASE_DEFAULT))
+        WHERE d.[FechaReporte] = @FechaReporte;
+
+        -- Insertar en tabla final
+        INSERT INTO [extract].[Derivados] WITH (TABLOCK)
+        (
+            [FechaReporte], [Portfolio], [InvestID], [Tipo_Derivado],
+            [Moneda_PLarga], [Moneda_PCorta],
+            [Notional_Vig_PLarga_Local], [Notional_Vig_PCorta_Local],
+            [VP_PLarga_Base], [VP_PCorta_Base], [MTM_Sistema],
+            [ID_Ejecucion], [ID_Fund], [ID_Proceso]
+        )
+        SELECT DISTINCT
+            t.[FechaReporte], t.[Portfolio], t.[InvestID], t.[Tipo_Derivado],
+            t.[Moneda_PLarga], t.[Moneda_PCorta],
+            t.[Notional_Vig_PLarga_Local], t.[Notional_Vig_PCorta_Local],
+            t.[VP_PLarga_Base], t.[VP_PCorta_Base], t.[MTM_Sistema],
+            t.[ID_Ejecucion], t.[ID_Fund], t.[ID_Proceso]
+        FROM #TempDerivados t
+        WHERE EXISTS (
+            SELECT 1 FROM [extract].[IPA] ipa WITH (NOLOCK)
+            WHERE ipa.[Portfolio] COLLATE DATABASE_DEFAULT = t.[Portfolio] COLLATE DATABASE_DEFAULT
+                AND ipa.[FechaReporte] = t.[FechaReporte]
+                AND ipa.[ID_Ejecucion] = t.[ID_Ejecucion]
+                AND ipa.[ID_Fund] = t.[ID_Fund]
+        );
+
+        SET @RowsInserted = @@ROWCOUNT;
+
+        DROP TABLE IF EXISTS #TempDerivados;
+        COMMIT TRANSACTION;
+
+        PRINT 'COMPLETADO: Insertados=' + CAST(@RowsInserted AS NVARCHAR(10)) +
+              ', Tiempo=' + CAST(DATEDIFF(SECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + 's';
+
+        RETURN 0;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        DROP TABLE IF EXISTS #TempDerivados;
+        PRINT 'Extract_Derivados_Batch ERROR: ' + ERROR_MESSAGE();
+        RETURN -1;
+    END CATCH
+END
+GO
+
+PRINT '✅ Migration 030 completada - Extract_Derivados_Batch con columnas entre corchetes';

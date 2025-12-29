@@ -54,9 +54,9 @@ class IPAService extends BasePipelineService {
   constructor(serviceConfig, pool, tracker, logger, trace = null) {
     super(serviceConfig, pool, tracker, logger, trace);
 
-    // Validar que la configuración tenga los 7 SPs del grupo IPA
-    if (!this.config.spList || this.config.spList.length !== 7) {
-      throw new Error('IPAService requiere exactamente 7 SPs en la configuración');
+    // Validar que la configuración tenga los 8 SPs del grupo IPA
+    if (!this.config.spList || this.config.spList.length !== 8) {
+      throw new Error('IPAService requiere exactamente 8 SPs en la configuración');
     }
 
     // Validar que los SPs estén en orden correcto
@@ -67,6 +67,7 @@ class IPAService extends BasePipelineService {
       'staging.IPA_04_TratamientoSuciedades_v2',
       'staging.IPA_05_EliminarCajasMTM_v2',
       'staging.IPA_06_CrearDimensiones_v2',
+      'staging.IPA_06B_PopulateIPACash_v2',
       'staging.IPA_07_AgruparRegistros_v2',
     ];
 

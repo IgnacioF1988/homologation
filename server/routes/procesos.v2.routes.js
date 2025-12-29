@@ -254,6 +254,19 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
       console.log(`[Proceso ${idProceso}] Ejecutando extracción batch (una vez)...`);
       await orchestrators[0]._executeBatchPhasesOnce();
       console.log(`[Proceso ${idProceso}] ✓ Extracción batch completada`);
+
+      // Actualizar Estado_Extraccion a OK para todos los fondos
+      console.log(`[Proceso ${idProceso}] Actualizando Estado_Extraccion a OK...`);
+      await pool.request()
+        .input('ID_Proceso', sql.BigInt, idProceso)
+        .query(`
+          UPDATE logs.Ejecucion_Fondos
+          SET Estado_Extraccion = 'OK'
+          FROM logs.Ejecucion_Fondos ef
+          INNER JOIN logs.Ejecuciones e ON ef.ID_Ejecucion = e.ID_Ejecucion
+          WHERE e.ID_Proceso = @ID_Proceso
+        `);
+      console.log(`[Proceso ${idProceso}] ✓ Estado_Extraccion actualizado a OK`);
     }
 
     // 4.6. [FASE 2] Etiquetar datos extraídos con ID_Ejecucion
@@ -292,12 +305,22 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
     console.log(`  - Fondos fallidos: ${fallidos}`);
 
     // 7. Actualizar estadísticas del proceso padre
-    await tracker.updateProcesoStats(idProceso);
+    try {
+      await tracker.updateProcesoStats(idProceso);
+    } catch (statsError) {
+      console.error(`[Proceso ${idProceso}] Error actualizando estadísticas (no crítico):`, statsError.message);
+    }
 
-    // 8. Actualizar estado en memoria
+    // 8. NO cerrar conexiones explícitamente - dejar que el pool las maneje
+    // Las conexiones dedicadas se cerrarán automáticamente cuando Node.js libere memoria
+    // o cuando el pool las recicle. Cerrarlas explícitamente puede causar problemas
+    // cuando múltiples procesos corren en paralelo.
+    console.log(`[Proceso ${idProceso}] ✓ Conexiones dedicadas serán liberadas por el pool automáticamente`);
+
+    // 9. Actualizar estado en memoria
     activeExecutions.set(idProceso, {
       ...activeExecutions.get(idProceso),
-      estado: fallidos > 0 ? 'COMPLETADO_CON_ERRORES' : 'COMPLETADO',
+      estado: fallidos > 0 ? 'PARCIAL' : 'COMPLETADO',
       fondosExitosos: exitosos,
       fondosFallidos: fallidos,
       finalizadoEn: new Date(),
@@ -307,6 +330,9 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
 
   } catch (err) {
     console.error(`[Proceso ${idProceso}] Error en Pipeline V2:`, err);
+
+    // NO cerrar conexiones explícitamente - dejar que el pool las maneje
+    console.log(`[Proceso ${idProceso}] Conexiones dedicadas serán liberadas por el pool automáticamente`);
 
     // Marcar proceso como error en BD
     try {
@@ -322,7 +348,7 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
           WHERE ID_Proceso = @ID_Proceso
         `);
     } catch (updateErr) {
-      console.error('Error actualizando estado del proceso:', updateErr);
+      console.error(`[Proceso ${idProceso}] Error actualizando estado (no crítico):`, updateErr.message);
     }
 
     // Actualizar estado en memoria

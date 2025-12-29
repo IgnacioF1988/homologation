@@ -1,0 +1,74 @@
+================================================================================
+TEST: Dedicated Connections + Temp Tables per Fondo
+================================================================================
+Fecha: 2024-10-24
+Fondos: 2, 3, 4
+
+1️⃣  Iniciando proceso...
+✓ Proceso iniciado: 1766773170123
+✓ Fondos a procesar: 1
+  - ALTURAS II (ID_Fund: 2)
+
+2️⃣  Esperando finalización del pipeline...
+   (Revisar logs del backend para ver creación/cierre de conexiones dedicadas)
+
+
+   Error consultando estado: Request failed with status code 404
+
+   Error consultando estado: Request failed with status code 404
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error
+
+   Error consultando estado: Error

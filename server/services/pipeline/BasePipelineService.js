@@ -129,13 +129,15 @@ class BasePipelineService {
         idEjecucion,
         fund.ID_Fund,
         this.id,
-        `staging.${this.id}_WorkTable`,
-        { portfolio: fund.Portfolio_Geneva, fundName: fund.FundShortName }
+        this.name, // Usar nombre descriptivo del servicio en lugar de tabla física
+        { portfolio: fund.Portfolio_Geneva, fundName: fund.FundShortName, spCount: this.config.spList.length }
       );
     }
 
-    // IMPORTANTE: Usar una Transaction para mantener temp tables entre SPs
-    // (las transacciones mantienen el mismo contexto de sesión para temp tables)
+    // IMPORTANTE: SIEMPRE usar Transaction para mantener temp tables entre SPs
+    // - Transaction garantiza que todos los requests comparten la misma sesión SQL
+    // - Sin transaction, cada request puede tener su propia sesión → ##temp tables se pierden
+    // - Incluso con Connection dedicada, necesitamos Transaction para mantener sesión
     let transaction = null;
 
     try {
@@ -151,7 +153,7 @@ class BasePipelineService {
             idEjecucion,
             fund.ID_Fund,
             this.id,
-            `staging.${this.id}_WorkTable`,
+            this.name,
             Date.now() - startTime,
             { skipped: true, reason: this.config.conditional }
           );
@@ -164,7 +166,8 @@ class BasePipelineService {
       await this.updateState(idEjecucion, fund.ID_Fund, 'EN_PROGRESO');
       await this.logInfo(idEjecucion, fund.ID_Fund, `Iniciando ${this.name}`);
 
-      // 3. Crear e iniciar una transacción (mantiene temp tables entre SPs)
+      // 3. Crear e iniciar una transacción (SIEMPRE, incluso con Connection dedicada)
+      // Esto garantiza que todos los SPs compartan la misma sesión SQL
       transaction = new sql.Transaction(this.pool);
       await transaction.begin();
 
@@ -173,39 +176,42 @@ class BasePipelineService {
         await this.executeSP(spConfig, context, transaction);
       }
 
-      // 5. Validar estado de transacción antes de commit
-      // XACT_STATE() retorna:
-      //   1  = Transacción activa y committable (proceder con commit)
-      //   0  = No hay transacción activa
-      //  -1  = Transacción uncommittable (DEBE hacer rollback, commit fallará)
-      const xactStateResult = await transaction.request()
-        .query('SELECT XACT_STATE() as XactState');
+      // 5. Validar estado de transacción antes de commit (solo si hay transacción)
+      if (transaction) {
+        // XACT_STATE() retorna:
+        //   1  = Transacción activa y committable (proceder con commit)
+        //   0  = No hay transacción activa
+        //  -1  = Transacción uncommittable (DEBE hacer rollback, commit fallará)
+        const xactStateResult = await transaction.request()
+          .query('SELECT XACT_STATE() as XactState');
 
-      const xactState = xactStateResult.recordset[0].XactState;
+        const xactState = xactStateResult.recordset[0].XactState;
 
-      if (xactState === -1) {
-        // Transacción uncommittable - forzar rollback
-        await this.logError(idEjecucion, fund.ID_Fund,
-          `Transacción uncommittable detectada (XACT_STATE = -1). Ejecutando rollback...`);
+        if (xactState === -1) {
+          // Transacción uncommittable - forzar rollback
+          await this.logError(idEjecucion, fund.ID_Fund,
+            `Transacción uncommittable detectada (XACT_STATE = -1). Ejecutando rollback...`);
 
-        // Registrar problema en sandbox.Fondos_Problema
-        await this.registerFundProblem(
-          idEjecucion,
-          fund.ID_Fund,
-          this.id,
-          'Transacción uncommittable detectada (XACT_STATE=-1) - posible violación de constraint o error en trigger'
-        );
+          // Registrar problema en sandbox.Fondos_Problema
+          await this.registerFundProblem(
+            idEjecucion,
+            fund.ID_Fund,
+            this.id,
+            'Transacción uncommittable detectada (XACT_STATE=-1) - posible violación de constraint o error en trigger'
+          );
 
-        await transaction.rollback();
-        throw new Error('Uncommittable transaction detected - transaction rolled back');
-      } else if (xactState === 1) {
-        // Transacción activa y committable - proceder con commit
-        await transaction.commit();
-      } else if (xactState === 0) {
-        // No hay transacción activa
-        await this.logWarning(idEjecucion, fund.ID_Fund,
-          'No hay transacción activa al intentar commit');
+          await transaction.rollback();
+          throw new Error('Uncommittable transaction detected - transaction rolled back');
+        } else if (xactState === 1) {
+          // Transacción activa y committable - proceder con commit
+          await transaction.commit();
+        } else if (xactState === 0) {
+          // No hay transacción activa
+          await this.logWarning(idEjecucion, fund.ID_Fund,
+            'No hay transacción activa al intentar commit');
+        }
       }
+      // Si isDedicatedConnection, no hay transacción que validar/commitear
 
       // 6. Actualizar estado exitoso
       const duration = Date.now() - startTime;
@@ -219,9 +225,9 @@ class BasePipelineService {
           idEjecucion,
           fund.ID_Fund,
           this.id,
-          `staging.${this.id}_WorkTable`,
+          this.name,
           duration,
-          { success: true }
+          { success: true, spExecuted: this.config.spList.length }
         );
       }
 
@@ -277,8 +283,9 @@ class BasePipelineService {
    * @private
    */
   async executeSP(spConfig, context, transaction) {
-    const { idEjecucion, fechaReporte, fund } = context;
+    const { idEjecucion, idProceso, fechaReporte, fund } = context;
     const spName = spConfig.name;
+    const spStartTime = Date.now();
 
     // ============================================
     // VALIDACIÓN DEFENSIVA
@@ -317,6 +324,22 @@ class BasePipelineService {
     // Log inicio
     await this.logDebug(idEjecucion, fund.ID_Fund, `Ejecutando ${spName}...`);
 
+    // Registrar inicio de SP individual en trace (si está habilitado)
+    if (this.trace) {
+      await this.trace.recordStart(
+        idProceso,
+        idEjecucion,
+        fund.ID_Fund,
+        this.id,  // Etapa: PROCESS_IPA, PROCESS_CAPM, etc.
+        spName,   // Recurso: nombre del SP
+        {
+          portfolio: fund.Portfolio_Geneva,
+          fundName: fund.FundShortName
+        },
+        spName    // SubEtapa: IPA_01_RescatarLocalPrice_v2, CAPM_01_Ajuste_CAPM_v2, etc.
+      );
+    }
+
     // ============================================
     // FIX: Normalizar fechaReporte antes de pasar a SP
     // ============================================
@@ -351,7 +374,13 @@ class BasePipelineService {
     // ============================================
 
     // Construir request usando la transacción (mantiene temp tables)
+    // Transaction garantiza que todos los SPs compartan la misma sesión SQL
     const request = transaction.request();
+
+    // *** DEBUG: Capturar mensajes PRINT del SP para diagnosticar problemas ***
+    request.on('info', (info) => {
+      console.log(`[${this.id}] SQL PRINT [${spName}]: ${info.message}`);
+    });
 
     // Configurar timeout
     if (spConfig.timeout) {
@@ -437,7 +466,7 @@ class BasePipelineService {
         idEjecucion,
         fund.ID_Fund,
         `${spName} completed but transaction is no longer active (XACT_STATE=0)`
-      );
+        );
     }
     // xactState === 1 (committable) es el estado esperado - continuar normalmente
 
@@ -452,6 +481,27 @@ class BasePipelineService {
       fund.ID_Fund,
       `${spName} completado - ReturnValue: ${returnValue}, Filas: ${rowsProcessed}, Errores: ${errorCount}`
     );
+
+    // Registrar fin exitoso de SP individual en trace (si está habilitado)
+    const spDuration = Date.now() - spStartTime;
+    if (this.trace) {
+      await this.trace.recordEnd(
+        idProceso,
+        idEjecucion,
+        fund.ID_Fund,
+        this.id,      // Etapa: PROCESS_IPA, PROCESS_CAPM, etc.
+        spName,       // Recurso: nombre del SP
+        spDuration,   // Duración real del SP individual
+        {
+          returnValue,
+          rowsProcessed,
+          errorCount,
+          portfolio: fund.Portfolio_Geneva,
+          fundName: fund.FundShortName
+        },
+        spName        // SubEtapa: IPA_01_RescatarLocalPrice_v2, CAPM_01_Ajuste_CAPM_v2, etc.
+      );
+    }
 
     // ============================================
     // Validar resultado según returnValue
@@ -469,6 +519,27 @@ class BasePipelineService {
     if (returnValue >= 5 && returnValue <= 8) {
       await this._handleStandByCode(returnValue, spName, context);
 
+      // Registrar evento stand-by en trace (NO es error, es pausa válida)
+      if (this.trace) {
+        const standByTypes = { 5: 'SUCIEDADES', 6: 'HOMOLOGACION', 7: 'DESCUADRES-CAPM', 8: 'DESCUADRES-GENERAL' };
+        await this.trace.recordEnd(
+          idProceso,
+          idEjecucion,
+          fund.ID_Fund,
+          this.id,
+          spName,
+          spDuration,
+          {
+            standBy: true,
+            standByCode: returnValue,
+            standByType: standByTypes[returnValue],
+            rowsProcessed,
+            errorCount
+          },
+          spName
+        );
+      }
+
       // Lanzar excepción especial (NO es error, es pausa válida que requiere aprobación)
       const error = new StandByRequiredError(
         `Stand-by requerido por ${spName}`,
@@ -480,6 +551,25 @@ class BasePipelineService {
 
     // Manejo de error crítico (código 3)
     if (returnValue === 3) {
+      // Registrar error crítico en trace
+      if (this.trace) {
+        await this.trace.recordError(
+          idProceso,
+          idEjecucion,
+          fund.ID_Fund,
+          this.id,
+          `${spName} falló críticamente (returnValue: 3)`,
+          {
+            spName,
+            returnValue,
+            rowsProcessed,
+            errorCount,
+            duration: spDuration
+          },
+          spName  // SubEtapa: nombre del SP que falló
+        );
+      }
+
       // Registrar en Fondos_Problema (si el SP no lo hizo ya)
       await this.registerFundProblem(
         idEjecucion,

@@ -190,6 +190,7 @@ class ExecutionTracker {
         'Estado_IPA_04_TratamientoSuciedades',
         'Estado_IPA_05_EliminarCajasMTM',
         'Estado_IPA_06_CrearDimensiones',
+        'Estado_IPA_06B_PopulateIPACash',
         'Estado_IPA_07_AgruparRegistros',
         // Sub-estados CAPM
         'Estado_CAPM_01_Ajuste',

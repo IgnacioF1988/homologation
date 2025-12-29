@@ -1,49 +1,42 @@
 /**
  * ExtractionService - Servicio de extracción de datos del pipeline
  *
- * Ejecuta los stored procedures de extracción para un fondo específico.
- * Extrae datos desde fuentes externas (Geneva, CAPM, UBS, etc.) y los carga
- * en tablas extract.* con aislamiento por ID_Ejecucion.
+ * Ejecuta los stored procedures de extracción en modo batch (todos los fondos a la vez)
+ * o en modo paralelo (por fondo individual).
+ *
+ * MODO BATCH (type: batch):
+ * - Procesa TODOS los fondos de un ID_Proceso en una sola ejecución
+ * - Ejecuta SPs con 2 parámetros: @ID_Proceso, @FechaReporte
+ * - Los SPs hacen JOIN con logs.Ejecuciones para tagear cada fila con ID_Ejecucion
+ * - Ventaja: Evita contención de locks al leer tablas fuente una sola vez
+ * - Uso: Fase EXTRACCION (Extract_IPA_Batch, Extract_CAPM_Batch, etc.)
+ *
+ * MODO PARALLEL (type: parallel):
+ * - Procesa UN fondo a la vez (llamado múltiples veces por FundOrchestrator)
+ * - Ejecuta SPs con 5 parámetros: @FechaReporte, @ID_Proceso, @ID_Ejecucion, @ID_Fund, @Portfolio
+ * - Uso: Fases PROCESS_* (IPA_01, CAPM_01, PNL_01, etc.)
  *
  * RECIBE:
- * - serviceConfig: Configuración desde pipeline.config.yaml (8 extractores)
+ * - serviceConfig: Configuración desde pipeline.config.yaml
  * - pool: Pool de conexiones SQL Server (compartido)
- * - tracker: ExecutionTracker (no se usa en extracción, pero se mantiene consistencia)
+ * - tracker: ExecutionTracker
  * - logger: LoggingService para registrar eventos
  * - trace: TraceService (opcional)
  * - context: { idEjecucion, idProceso, fechaReporte, fund } desde FundOrchestrator
- *
- * PROCESA:
- * 1. Agrupa extractores por orden de ejecución (order 1, order 2, etc.)
- * 2. Ejecuta extractores del mismo orden en paralelo (hasta 4 simultáneos por fondo)
- * 3. Para cada extractor:
- *    - Determina Portfolio según tipo (UBS usa Portfolio_UBS, otros usan Portfolio_Geneva)
- *    - Ejecuta SP con parámetros: FechaReporte, ID_Proceso, ID_Ejecucion, ID_Fund, Portfolio
- *    - Valida returnValue (0=datos, 1=sin datos, 2=retry, 3=error crítico)
- * 4. Maneja retry automático en deadlocks y timeouts (3 intentos, 5s-10s-15s)
  *
  * ENVIA:
  * - Datos a: extract.IPA, extract.CAPM, extract.PosModRF, extract.SONA,
  *            extract.Derivados, extract.UBS (con ID_Ejecucion asignado)
  * - Logs a: LoggingService → logs.Ejecucion_Logs
- *
- * DEPENDENCIAS:
- * - No depende de otros servicios (es el primero en ejecutarse)
- * - Requerido por: ValidationService (valida datos extraídos)
- *
- * CONTEXTO PARALELO:
- * - Se ejecuta POR CADA FONDO de forma aislada
- * - Cada fondo procesa sus 8 extractores en 2 grupos:
- *   * Grupo 1 (order 1): Extract_IPA, Extract_CAPM, Extract_PosModRF, Extract_SONA (paralelo)
- *   * Grupo 2 (order 2): Extract_Derivados, Extract_UBS_* (paralelo)
- * - Límite: 4 extractores simultáneos por fondo
- * - Aislamiento: cada fondo tiene su Portfolio único, escribe con su ID_Ejecucion
  */
 
 const sql = require('mssql');
 const pLimit = require('p-limit');
 
 class ExtractionService {
+  // Tracker estático para evitar ejecución duplicada de servicios batch
+  // Key: "${idProceso}_${serviceId}" → Value: Promise de ejecución
+  static batchExecutionTracker = new Map();
   /**
    * Constructor del servicio de extracción
    *
@@ -64,7 +57,7 @@ class ExtractionService {
   }
 
   /**
-   * Ejecutar el servicio de extracción para un fondo específico
+   * Ejecutar el servicio de extracción
    *
    * @param {Object} context - Contexto de ejecución (viene de: FundOrchestrator)
    * @param {BigInt} context.idEjecucion - ID único de la ejecución del fondo
@@ -74,17 +67,47 @@ class ExtractionService {
    * @returns {Promise<Object>} - { success: true/false, duration: ms, extractedSources: Array }
    *
    * Flujo:
-   * 1. Agrupa extractores por orden (order 1, order 2, etc.)
-   * 2. Para cada grupo en orden secuencial:
-   *    - Ejecuta extractores del grupo en paralelo (hasta 4 simultáneos)
-   *    - Espera a que todos terminen antes de pasar al siguiente grupo
-   * 3. Recopila resultados de todos los extractores
-   * 4. Retorna lista de fuentes extraídas con éxito
+   * - Si type=batch: Ejecuta TODOS los fondos en una sola llamada (singleton)
+   * - Si type=parallel: Ejecuta UN fondo (modo original)
    *
    * Nota: ReturnValue 1 (sin datos) NO es error, es válido para fechas sin operaciones
    */
   async execute(context) {
     const { idEjecucion, idProceso, fechaReporte, fund } = context;
+
+    // ============================================
+    // MODO BATCH: Procesa todos los fondos a la vez
+    // ============================================
+    if (this.config.type === 'batch') {
+      // Batch services solo se ejecutan UNA vez por ID_Proceso
+      // Usar singleton pattern para evitar ejecución duplicada
+      const batchKey = `${idProceso}_${this.id}`;
+
+      // Si ya se está ejecutando o ya se ejecutó, retornar el resultado en caché
+      if (ExtractionService.batchExecutionTracker.has(batchKey)) {
+        const cachedPromise = ExtractionService.batchExecutionTracker.get(batchKey);
+        console.log(`[ExtractionService ${idProceso}] Servicio batch ${this.id} ya ejecutado/ejecutándose - retornando resultado en caché`);
+        return await cachedPromise;
+      }
+
+      // Crear promesa de ejecución y guardarla en tracker
+      const executionPromise = this._executeBatchMode(idProceso, fechaReporte);
+      ExtractionService.batchExecutionTracker.set(batchKey, executionPromise);
+
+      // Ejecutar y retornar
+      const result = await executionPromise;
+
+      // Limpiar tracker después de 5 minutos (evitar memory leak en ejecuciones largas)
+      setTimeout(() => {
+        ExtractionService.batchExecutionTracker.delete(batchKey);
+      }, 300000);
+
+      return result;
+    }
+
+    // ============================================
+    // MODO PARALLEL: Procesa un fondo a la vez (modo original)
+    // ============================================
     const startTime = Date.now();
 
     try {
@@ -338,6 +361,139 @@ class ExtractionService {
     }
 
     throw lastError;
+  }
+
+  /**
+   * Ejecutar servicio en modo BATCH (todos los fondos a la vez)
+   *
+   * @param {BigInt} idProceso - ID del proceso padre
+   * @param {String} fechaReporte - Fecha a procesar (YYYY-MM-DD)
+   * @returns {Promise<Object>} - { success: true/false, duration: ms, mode: 'batch' }
+   *
+   * Flujo:
+   * 1. Agrupa SPs por orden
+   * 2. Ejecuta cada orden SECUENCIALMENTE (no paralelizar batch SPs)
+   * 3. Cada SP recibe solo: @ID_Proceso, @FechaReporte
+   * 4. Los SPs hacen JOIN con logs.Ejecuciones para procesar todos los fondos
+   *
+   * Nota: Este método se ejecuta UNA sola vez por proceso, no por fondo
+   * @private
+   */
+  async _executeBatchMode(idProceso, fechaReporte) {
+    const startTime = Date.now();
+
+    try {
+      console.log(`[ExtractionService ${idProceso}] Iniciando extracción BATCH - fecha ${fechaReporte}`);
+      // NOTA: No logeamos a BD en modo batch (no hay ID_Ejecucion individual)
+
+      // Agrupar SPs por orden
+      const spsByOrder = this._groupSPsByOrder();
+
+      // Ejecutar cada grupo en orden secuencial (NO paralelizar batch SPs)
+      const extractedSources = [];
+      for (const [order, sps] of spsByOrder.entries()) {
+        console.log(`[ExtractionService ${idProceso}] Ejecutando grupo orden ${order} (${sps.length} SPs) en modo BATCH`);
+
+        // Ejecutar SPs del mismo orden secuencialmente
+        for (const spConfig of sps) {
+          const result = await this._executeBatchSP(spConfig, idProceso, fechaReporte);
+          extractedSources.push(result);
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`[ExtractionService ${idProceso}] Extracción BATCH completada en ${duration}ms - ${extractedSources.length} fuentes extraídas`);
+
+      return {
+        success: true,
+        duration,
+        mode: 'batch',
+        extractedSources
+      };
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[ExtractionService ${idProceso}] Error en extracción BATCH:`, error);
+
+      return {
+        success: false,
+        duration,
+        mode: 'batch',
+        error
+      };
+    }
+  }
+
+  /**
+   * Ejecutar un stored procedure en modo BATCH
+   *
+   * @param {Object} spConfig - Configuración del SP desde pipeline.config.yaml
+   * @param {BigInt} idProceso - ID del proceso padre
+   * @param {String} fechaReporte - Fecha a procesar (YYYY-MM-DD)
+   * @returns {Promise<Object>} - { source: nombre SP, returnValue: 0/1/-1, success: boolean }
+   *
+   * Flujo:
+   * 1. Crea request con solo 2 parámetros: ID_Proceso, FechaReporte
+   * 2. Ejecuta SP con retry automático
+   * 3. Valida returnValue (0=datos, 1=sin datos, -1=error)
+   *
+   * Nota: Batch SPs NO reciben Portfolio, ID_Fund, ID_Ejecucion (los obtienen del JOIN)
+   * @private
+   */
+  async _executeBatchSP(spConfig, idProceso, fechaReporte) {
+    const spName = spConfig.name;
+
+    try {
+      console.log(`[ExtractionService ${idProceso}] Ejecutando ${spName} en modo BATCH...`);
+
+      // Crear request
+      const request = this.pool.request();
+
+      // Configurar timeout
+      if (spConfig.timeout) {
+        request.timeout = spConfig.timeout;
+      }
+
+      // Parámetros BATCH: Solo ID_Proceso y FechaReporte
+      request.input('ID_Proceso', sql.BigInt, idProceso);
+      request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
+
+      // Ejecutar SP con retry logic
+      const result = await this._executeWithRetry(async () => {
+        return await request.execute(spName);
+      }, spConfig);
+
+      // Procesar resultado
+      const returnValue = result.returnValue;
+
+      console.log(
+        `[ExtractionService ${idProceso}] ${spName} BATCH completado - ` +
+        `ReturnValue: ${returnValue}`
+      );
+
+      // Validar resultado
+      if (returnValue === 3) {
+        throw new Error(`${spName} falló críticamente (returnValue: 3)`);
+      }
+
+      if (returnValue === 2) {
+        throw new Error(`${spName} error recuperable (returnValue: 2)`);
+      }
+
+      if (returnValue === 1) {
+        console.log(`[ExtractionService ${idProceso}] ${spName} BATCH completó sin datos`);
+      }
+
+      return {
+        source: spName,
+        returnValue,
+        success: returnValue === 0 || returnValue === 1, // 0=datos, 1=sin datos (ambos OK)
+      };
+
+    } catch (error) {
+      console.error(`[ExtractionService ${idProceso}] Error en ${spName} BATCH:`, error);
+      throw error;
+    }
   }
 
   // ============================================

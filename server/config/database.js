@@ -18,6 +18,7 @@ const baseConfig = {
     min: 10,      // Conexiones baseline reducidas
     idleTimeoutMillis: 30000,
   },
+  requestTimeout: 120000,  // 120 segundos para SPs de extracción (evita timeout con paralelización)
   authentication: process.env.DB_USER ? {
     type: 'default',
     options: {
