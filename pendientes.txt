@@ -53,3 +53,9 @@ investigar:
 
 
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Limpiar comentarios en backend: todo lo legacy fuera, actualizado con nuevo funcionamiento en paralelo de fondos, que cada pieza indique qué recibe, de dónde, para qué y donde envía después n el pipeline. Todo en español también. 
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Creo que es muy importante en este punto en paralelizar lo CAPM y PNL dentro de un mismo fondo (analizar bien cómo tendría que ser el flujo óptimo).

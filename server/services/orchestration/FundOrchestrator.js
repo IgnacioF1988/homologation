@@ -564,6 +564,7 @@ class FundOrchestrator {
    * - Verifica stand-by (logs.FondosEnStandBy)
    * - Verifica condicionales (Flag_UBS, Flag_Derivados)
    * - Ejecuta servicios en orden
+   * - AL FINAL: Consolida ##temp tables → process.CUBO_Final
    * - Maneja errores según política (STOP_ALL, STOP_FUND, CONTINUE)
    *
    * @param {Object} fund - Fondo a procesar
@@ -571,6 +572,8 @@ class FundOrchestrator {
    * @private
    */
   async _executeFundServices(fund, serviceIds) {
+    let fundProcessedOK = true;
+
     try {
       // NUEVO: Verificar si fondo debe ser excluido por problemas
       const shouldExecute = await this._shouldExecuteFund(fund, this.fechaReporte);
@@ -604,6 +607,7 @@ class FundOrchestrator {
             'BLOQUEADO_STANDBY'
           );
 
+          fundProcessedOK = false;
           break; // DETENER ejecución de servicios siguientes
         }
 
@@ -626,14 +630,78 @@ class FundOrchestrator {
           if (!result.success) {
             // Manejar error según política
             await this._handleServiceError(service, fund, result.error);
+            fundProcessedOK = false;
           }
         } catch (error) {
           await this._handleServiceError(service, fund, error);
+          fundProcessedOK = false;
         }
       }
+
+      // =====================================================
+      // FASE FINAL: Consolidar ##temp tables → CUBO_Final
+      // =====================================================
+      // IMPORTANTE: Esto debe ejecutarse ANTES de cerrar la conexión
+      // porque las ##temp tables se eliminan al cerrar la conexión
+      if (fundProcessedOK) {
+        await this._consolidateFundToCubo(fund);
+      }
+
     } finally {
       // Actualizar stats después de procesar cada fondo (tiempo real)
       await this._updateExecutionStats();
+    }
+  }
+
+  /**
+   * Consolidar datos de ##temp tables → process.CUBO_Final
+   * - Lee de ##IPA_Final, ##CAPM_Work, ##PNL_Final, ##Derivados_Work, ##UBS_Work
+   * - Escribe a process.CUBO_Final con TipoRegistro apropiado
+   * - DEBE ejecutarse en la MISMA conexión que tiene las ##temp tables
+   *
+   * @param {Object} fund - Fondo a consolidar
+   * @private
+   */
+  async _consolidateFundToCubo(fund) {
+    try {
+      console.log(`[FundOrchestrator ${this.idEjecucion}] Consolidando fondo ${fund.ID_Fund} → CUBO_Final...`);
+
+      const request = this.dedicatedConnection.request();
+      request.input('ID_Ejecucion', sql.BigInt, this.idEjecucion);
+      request.input('ID_Fund', sql.Int, fund.ID_Fund);
+      request.input('ID_Proceso', sql.BigInt, this.idProceso);
+      request.input('FechaReporte', sql.NVarChar(10), this.fechaReporte);
+      request.input('Debug', sql.Bit, 0);
+
+      const result = await request.execute('staging.Consolidar_Fondo_A_Cubo_v3');
+      const returnValue = result.returnValue;
+
+      if (returnValue === 0) {
+        // Obtener estadísticas del resultado
+        const stats = result.recordset && result.recordset[0] ? result.recordset[0] : {};
+        console.log(
+          `[FundOrchestrator ${this.idEjecucion}] ✓ Fondo ${fund.ID_Fund} consolidado: ` +
+          `${stats.TotalInserted || 0} registros (IPA:${stats.Count_IPA || 0}, CAPM:${stats.Count_CAPM || 0}, ` +
+          `PNL:${stats.Count_PNL || 0}, DERIV:${stats.Count_Derivados || 0}, UBS:${stats.Count_MLCCII || 0})`
+        );
+      } else if (returnValue === 2) {
+        console.warn(`[FundOrchestrator ${this.idEjecucion}] Consolidación fondo ${fund.ID_Fund}: Retry sugerido (deadlock)`);
+      } else {
+        console.error(`[FundOrchestrator ${this.idEjecucion}] Error consolidando fondo ${fund.ID_Fund}: ReturnCode=${returnValue}`);
+      }
+
+    } catch (error) {
+      console.error(`[FundOrchestrator ${this.idEjecucion}] Error en consolidación fondo ${fund.ID_Fund}:`, error.message);
+
+      // Registrar error pero NO detener el pipeline
+      await this.logger.log(
+        this.idEjecucion,
+        fund.ID_Fund,
+        'ERROR',
+        'FundOrchestrator',
+        'CONSOLIDAR_CUBO',
+        `Error consolidando a CUBO_Final: ${error.message}`
+      );
     }
   }
 

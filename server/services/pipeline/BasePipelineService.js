@@ -351,9 +351,10 @@ class BasePipelineService {
     let fechaReporteParam = fechaReporte;
 
     if (fechaReporteParam instanceof Date) {
-      const year = fechaReporteParam.getFullYear();
-      const month = String(fechaReporteParam.getMonth() + 1).padStart(2, '0');
-      const day = String(fechaReporteParam.getDate()).padStart(2, '0');
+      // FIX: Usar métodos UTC para evitar desplazamiento de fecha por timezone
+      const year = fechaReporteParam.getUTCFullYear();
+      const month = String(fechaReporteParam.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(fechaReporteParam.getUTCDate()).padStart(2, '0');
       fechaReporteParam = `${year}-${month}-${day}`;
     }
 
@@ -891,12 +892,14 @@ class BasePipelineService {
         return;
       }
 
-      // FIX: Si es un Date object, convertir a string YYYY-MM-DD
-      // SQL Server puede retornar DATE/DATETIME como Date object
+      // FIX: Si es un Date object, convertir a string YYYY-MM-DD usando UTC
+      // SQL Server retorna DATE/DATETIME como Date object en UTC (ej: 2025-12-26T00:00:00.000Z)
+      // BUG ANTERIOR: getDate()/getMonth()/getFullYear() usan timezone local, causando
+      // que 2025-12-26 UTC se convierta a 2025-12-25 en Chile (UTC-3)
       if (fechaReporte instanceof Date) {
-        const year = fechaReporte.getFullYear();
-        const month = String(fechaReporte.getMonth() + 1).padStart(2, '0');
-        const day = String(fechaReporte.getDate()).padStart(2, '0');
+        const year = fechaReporte.getUTCFullYear();
+        const month = String(fechaReporte.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(fechaReporte.getUTCDate()).padStart(2, '0');
         fechaReporte = `${year}-${month}-${day}`;
       }
 
