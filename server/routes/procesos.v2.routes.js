@@ -32,10 +32,10 @@
  * - Respuesta REST inmediata: {success, idProceso, fechaReporte, ejecuciones[]}
  * - Actualizaciones en background a: logs.Ejecuciones (estado proceso), logs.Ejecucion_Fondos (estado fondos)
  * - Eventos WebSocket a: Frontend (actualizaciones tiempo real vía WebSocketManager)
- * - Logs a: logs.Ejecucion_Logs (LoggingService bulk insert)
+ * - Eventos a: logs.EventosDetallados (TrackingService - solo ERROR/WARNING/STAND_BY)
  *
  * DEPENDENCIAS:
- * - Requiere: SQL Server pool, FundOrchestrator, ExecutionTracker, LoggingService, TraceService
+ * - Requiere: SQL Server pool, FundOrchestrator, TrackingService, PipelineEventEmitter
  * - Requerido por: Frontend (inicia procesos y consulta estados)
  *
  * CONTEXTO PARALELO:

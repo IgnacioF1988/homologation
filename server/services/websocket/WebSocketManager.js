@@ -8,7 +8,7 @@
  * - server: Servidor HTTP de Express (para montar WebSocket Server)
  * - getPoolFn: Función para obtener pool de SQL Server (opcional)
  * - Mensajes de clientes: SUBSCRIBE, UNSUBSCRIBE, PING, GET_STATUS
- * - Eventos desde ExecutionTracker: emitFundUpdate(), emitExecutionUpdate()
+ * - Eventos desde TrackingService: broadcast() para actualizaciones en tiempo real
  *
  * PROCESA:
  * 1. Inicializa WebSocket Server en /api/ws/pipeline
@@ -23,13 +23,13 @@
  * - Eventos WebSocket a: Clientes conectados (frontend)
  *   * CONNECTED: al conectarse (incluye clientId)
  *   * SUBSCRIBED: al suscribirse a ejecución
- *   * FUND_UPDATE: estado de fondo actualizado (desde ExecutionTracker)
- *   * EXECUTION_UPDATE: estado de ejecución actualizado (desde ExecutionTracker)
+ *   * FUND_UPDATE: estado de fondo actualizado (desde TrackingService)
+ *   * EXECUTION_UPDATE: estado de ejecución actualizado (desde TrackingService)
  *   * PONG: respuesta a PING (heartbeat)
  *
  * DEPENDENCIAS:
  * - Requiere: HTTP Server de Express (para montar WebSocket)
- * - Requerido por: ExecutionTracker (emite eventos), Frontend (recibe actualizaciones)
+ * - Requerido por: TrackingService (emite eventos), Frontend (recibe actualizaciones)
  *
  * CONTEXTO PARALELO:
  * - Servicio SINGLETON: una sola instancia global para toda la aplicación
