@@ -110,6 +110,9 @@ const useFormValidation = (formData, mode) => {
     // Usar helper centralizado que soporta múltiples formatos (BBG, Bloomberg, ID 3, etc.)
     const isBBGSource = isBBG(formData.publicDataSource);
 
+    // Verificar si yieldSource es BBG (para validaciones de Fixed Income)
+    const isBBGYieldSource = ['1', 1, 'BBG', 'Bloomberg'].includes(formData.yieldSource);
+
     // Usar helpers centralizados que soportan EQ, Equity, 2, etc.
     const isEquityType = isEquity(formData.investmentTypeCode);
     const isFixedIncomeType = isFixedIncome(formData.investmentTypeCode);
@@ -142,8 +145,13 @@ const useFormValidation = (formData, mode) => {
       }
     }
 
+    // Validar override requerido para Fixed Income + BBG yieldSource
+    if (isFixedIncomeType && isBBGYieldSource && !formData.override) {
+      newErrors.override = 'Override es obligatorio para Fixed Income con yieldSource BBG';
+    }
+
     // Validar yasYldFlag requerido cuando override='True' (Fixed Income + BBG)
-    if (isFixedIncomeType && isBBGSource && formData.override === 'True') {
+    if (isFixedIncomeType && isBBGYieldSource && formData.override === 'True') {
       if (!formData.yasYldFlag && formData.yasYldFlag !== 0) {
         newErrors.yasYldFlag = 'YAS_YLD_FLAG es obligatorio cuando Override está activado';
       }
@@ -157,7 +165,8 @@ const useFormValidation = (formData, mode) => {
     }
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    // Return both validity and the errors object for immediate access
+    return { isValid: Object.keys(newErrors).length === 0, errors: newErrors };
   }, [formData, mode, requiredFields, validateField]);
 
   // Obtener error de un campo
@@ -209,9 +218,15 @@ const useFormValidation = (formData, mode) => {
       }
     }
 
-    // Verificar yasYldFlag cuando override='True' (Fixed Income + BBG)
-    if (isFixedIncomeComplete && isBBGComplete && formData.override === 'True') {
-      if (!formData.yasYldFlag && formData.yasYldFlag !== 0) {
+    // Verificar override y yasYldFlag para Fixed Income con yieldSource BBG
+    const isBBGYieldSourceComplete = ['1', 1, 'BBG', 'Bloomberg'].includes(formData.yieldSource);
+    if (isFixedIncomeComplete && isBBGYieldSourceComplete) {
+      // Override es requerido
+      if (!formData.override) {
+        return false;
+      }
+      // yasYldFlag requerido cuando override='True'
+      if (formData.override === 'True' && !formData.yasYldFlag && formData.yasYldFlag !== 0) {
         return false;
       }
     }

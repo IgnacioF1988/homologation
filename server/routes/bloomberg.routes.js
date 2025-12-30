@@ -63,9 +63,11 @@ const LOCAL_FOLDER = process.env.BBG_LOCAL_FOLDER || 'C:\\Users\\dwielandt.PATRI
 const LOCAL_JOBS_CSV = path.join(LOCAL_FOLDER, 'jobs.csv');
 const LOCAL_CASHFLOWS_CSV = path.join(LOCAL_FOLDER, 'cashflows.csv');
 const LOCAL_BOND_CHARS_CSV = path.join(LOCAL_FOLDER, 'bond_characteristics.csv');
+const LOCAL_EQUITY_MKTCAPS_CSV = path.join(LOCAL_FOLDER, 'equity_mktcaps.csv');
 const LOCAL_JOBS_LOCK = path.join(LOCAL_FOLDER, 'jobs.csv.lock');
 const LOCAL_CASHFLOWS_LOCK = path.join(LOCAL_FOLDER, 'cashflows.csv.lock');
 const LOCAL_BOND_CHARS_LOCK = path.join(LOCAL_FOLDER, 'bond_characteristics.csv.lock');
+const LOCAL_EQUITY_MKTCAPS_LOCK = path.join(LOCAL_FOLDER, 'equity_mktcaps.csv.lock');
 
 // SHARED folder - only used for direct access if available (legacy)
 const SHARED_FOLDER = process.env.BBG_SHARED_FOLDER || '\\\\moneda03\\Compartidos\\Inteligencia de Negocios y Mercados\\BBG_Job_requests';
@@ -76,6 +78,7 @@ const CASHFLOWS_CSV = path.join(SHARED_FOLDER, 'cashflows.csv');
 const POLL_INTERVAL_MS = 5000; // Check every 5 seconds
 let lastCashflowsModified = 0;
 let lastBondCharsModified = 0;
+let lastEquityMktcapsModified = 0;
 let lastJobsCsvContent = ''; // Track last written content to avoid redundant writes
 
 // CSV helper functions
@@ -1224,6 +1227,106 @@ async function importBondCharacteristicsFromCSV() {
 }
 
 /**
+ * Import equity market caps from CSV and insert into metrics.EquityMktCaps
+ * Also updates stock.instrumentos.latestMarketCapUSD with most recent value
+ */
+async function importEquityMktcapsFromCSV() {
+  try {
+    if (!fs.existsSync(LOCAL_EQUITY_MKTCAPS_CSV)) {
+      return;
+    }
+
+    // Check if file was modified
+    const stats = fs.statSync(LOCAL_EQUITY_MKTCAPS_CSV);
+    const mtime = stats.mtimeMs;
+
+    if (mtime <= lastEquityMktcapsModified) {
+      return; // No changes
+    }
+
+    const content = fs.readFileSync(LOCAL_EQUITY_MKTCAPS_CSV, 'utf-8');
+    const lines = content.trim().split('\n');
+
+    if (lines.length <= 1) {
+      return; // Only headers or empty
+    }
+
+    lastEquityMktcapsModified = mtime;
+    console.log('[Bloomberg] equity_mktcaps.csv changed, syncing to SQL...');
+
+    const pool = await getBBGPool();
+    const headers = parseCSVLine(lines[0]);
+    let imported = 0;
+    let skipped = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i]);
+      const mktcap = {};
+      headers.forEach((h, idx) => mktcap[h] = values[idx]?.trim() || null);
+
+      if (!mktcap.pk2 || !mktcap.trade_date) {
+        continue;
+      }
+
+      try {
+        // Check if this specific record exists (skip duplicates)
+        const existsResult = await pool.request()
+          .input('pk2', sql.NVarChar(50), mktcap.pk2)
+          .input('trade_date', sql.Date, new Date(mktcap.trade_date))
+          .query('SELECT 1 FROM metrics.EquityMktCaps WHERE pk2 = @pk2 AND trade_date = @trade_date');
+
+        if (existsResult.recordset.length > 0) {
+          skipped++;
+          continue;
+        }
+
+        // Insert new market cap record
+        await pool.request()
+          .input('pk2', sql.NVarChar(50), mktcap.pk2)
+          .input('ticker_bbg', sql.NVarChar(100), mktcap.ticker_bbg)
+          .input('trade_date', sql.Date, new Date(mktcap.trade_date))
+          .input('market_cap_usd', sql.Decimal(20, 2), parseFloat(mktcap.market_cap_usd) || 0)
+          .input('job_id', sql.BigInt, parseInt(mktcap.job_id) || null)
+          .query(`
+            INSERT INTO metrics.EquityMktCaps
+              (pk2, ticker_bbg, trade_date, market_cap_usd, job_id, fetched_at)
+            VALUES
+              (@pk2, @ticker_bbg, @trade_date, @market_cap_usd, @job_id, GETDATE())
+          `);
+        imported++;
+
+      } catch (err) {
+        // Ignore individual row errors
+        console.error(`[Bloomberg] Error inserting mktcap for ${mktcap.pk2}: ${err.message}`);
+      }
+    }
+
+    if (imported > 0 || skipped > 0) {
+      console.log(`[Bloomberg] Equity mktcaps sync complete: ${imported} imported, ${skipped} skipped`);
+
+      // Clear LOCAL equity_mktcaps.csv after successful import (headers only)
+      const headers_line = 'pk2,ticker_bbg,trade_date,market_cap_usd,job_id,fetched_at\n';
+      try {
+        await withLock(LOCAL_EQUITY_MKTCAPS_LOCK, async () => {
+          fs.writeFileSync(LOCAL_EQUITY_MKTCAPS_CSV, headers_line, 'utf-8');
+        });
+        console.log('[Bloomberg] Cleared LOCAL/equity_mktcaps.csv after import');
+      } catch (clearErr) {
+        console.error('[Bloomberg] Error clearing LOCAL/equity_mktcaps.csv:', clearErr.message);
+      }
+    }
+
+  } catch (err) {
+    // Silently ignore if table doesn't exist yet
+    if (err.message && err.message.includes('Invalid object name')) {
+      // Table not created yet - silent
+    } else {
+      console.error('[Bloomberg] Error importing equity mktcaps:', err.message);
+    }
+  }
+}
+
+/**
  * Sync job status from local CSV back to SQL
  * When Bloomberg marks a job as RUNNING/COMPLETED/ERROR, update SQL
  * After updating, remove COMPLETED jobs from CSV (they're done)
@@ -1287,12 +1390,12 @@ async function importJobStatusFromCSV() {
       }
     }
 
-    // Remove COMPLETED jobs from CSV (they're done, SQL has the record)
-    const completedJobIds = csvJobs.filter(j => j.status === 'COMPLETED').map(j => j.job_id);
-    if (completedJobIds.length > 0) {
-      const remainingJobs = csvJobs.filter(j => j.status !== 'COMPLETED');
+    // Remove COMPLETED and ERROR jobs from CSV (they're done, SQL has the record)
+    const finishedJobIds = csvJobs.filter(j => j.status === 'COMPLETED' || j.status === 'ERROR').map(j => j.job_id);
+    if (finishedJobIds.length > 0) {
+      const remainingJobs = csvJobs.filter(j => j.status !== 'COMPLETED' && j.status !== 'ERROR');
       await writeLocalJobsCsv(remainingJobs, true); // forceWrite to ensure removal
-      console.log(`[Bloomberg] Removed ${completedJobIds.length} completed jobs from CSV: ${completedJobIds.join(', ')}`);
+      console.log(`[Bloomberg] Removed ${finishedJobIds.length} finished jobs from CSV: ${finishedJobIds.join(', ')}`);
     }
 
   } catch (err) {
@@ -1371,7 +1474,8 @@ function startBackgroundJobs() {
   setInterval(async () => {
     await importJobStatusFromCSV();           // First sync completed job status from CSV → SQL
     await exportPendingJobsToCSV();           // Then export pending jobs from SQL → CSV
-    await importCashflowsFromCSV();           // Import cashflows from CSV → SQL
+    await importCashflowsFromCSV();           // Import cashflows from CSV → SQL (Fixed Income)
+    await importEquityMktcapsFromCSV();       // Import market caps from CSV → SQL (Equity)
     await importBondCharacteristicsFromCSV(); // Import BBG characteristics and enrich colaPendientes
     await processCompletedQueue();            // Process completed colaPendientes, create BBG jobs
     await archiveProcessedCashflows();        // Archive instruments with imported cashflows to stock.instrumentos

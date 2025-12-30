@@ -149,7 +149,7 @@ const ParametersFISection = ({
         <>
         <Box sx={{ mt: 2, mb: 1 }}>
           <Alert severity="info" sx={{ py: 0.5 }}>
-            Complete los campos Bloomberg requeridos:
+            Complete los campos Bloomberg (CoCo, Callable, Sinkable son opcionales - se obtienen de BBG):
           </Alert>
         </Box>
         <FormRow>
@@ -161,7 +161,6 @@ const ParametersFISection = ({
             options={options?.booleanValues || []}
             readOnly={isFieldReadOnly('coco')}
             error={getError('coco')}
-            required
             width="md"
           />
           <SelectField
@@ -172,7 +171,6 @@ const ParametersFISection = ({
             options={options?.booleanValues || []}
             readOnly={isFieldReadOnly('callable')}
             error={getError('callable')}
-            required
             width="md"
           />
           <SelectField
@@ -183,7 +181,6 @@ const ParametersFISection = ({
             options={options?.booleanValues || []}
             readOnly={isFieldReadOnly('sinkable')}
             error={getError('sinkable')}
-            required
             width="md"
           />
         </FormRow>
@@ -196,6 +193,7 @@ const ParametersFISection = ({
             options={options?.trueFalseValues || []}
             readOnly={isFieldReadOnly('override')}
             error={getError('override')}
+            required
             width="md"
           />
           <TextField

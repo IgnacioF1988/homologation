@@ -13,15 +13,13 @@ router.get('/', async (req, res) => {
   try {
     const pool = await getPoolHomologacion();
 
-    // Si se pide reset, primero resetear los en_proceso a pendiente
-    // EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
+    // Si se pide reset, resetear los en_proceso a pendiente
+    // NOTE: esperando_bbg items are NOT reset - they're waiting for Bloomberg data
     if (resetEnProceso === 'true') {
       await pool.request().query(`
         UPDATE sandbox.colaPendientes
         SET estado = 'pendiente'
         WHERE estado = 'en_proceso'
-          AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
-               OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
       `);
     }
 
@@ -74,26 +72,22 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/cola-pendientes/reset-en-proceso - Resetear todos los en_proceso a pendiente
-// EXCEPT: BBG instruments waiting for Bloomberg data (yield_Source = 'BBG')
+// NOTE: esperando_bbg items are NOT reset - they have a dedicated estado for Bloomberg waiting
 router.post('/reset-en-proceso', async (req, res) => {
   try {
     const pool = await getPoolHomologacion();
 
-    // Contar cuántos hay en_proceso antes del reset (excluding BBG)
+    // Contar cuántos hay en_proceso antes del reset
     const countBefore = await pool.request().query(`
       SELECT COUNT(*) as count FROM sandbox.colaPendientes
       WHERE estado = 'en_proceso'
-        AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
-             OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
     `);
 
-    // Resetear todos los en_proceso a pendiente (excluding BBG)
+    // Resetear todos los en_proceso a pendiente (esperando_bbg has its own estado now)
     await pool.request().query(`
       UPDATE sandbox.colaPendientes
       SET estado = 'pendiente'
       WHERE estado = 'en_proceso'
-        AND (JSON_VALUE(datosOrigen, '$.yield_Source') != 'BBG'
-             OR JSON_VALUE(datosOrigen, '$.yield_Source') IS NULL)
     `);
 
     res.json({
@@ -137,6 +131,7 @@ router.get('/stats', async (req, res) => {
       en_proceso: 0,
       completado: 0,
       error: 0,
+      esperando_bbg: 0,
       total: 0,
       procesadosHoy: procesadosHoyResult.recordset[0]?.cantidad || 0,
     };
@@ -245,7 +240,7 @@ router.patch('/:id/estado', async (req, res) => {
   const { id } = req.params;
   const { estado, observaciones } = req.body;
 
-  const estadosValidos = ['pendiente', 'en_proceso', 'completado', 'error'];
+  const estadosValidos = ['pendiente', 'en_proceso', 'completado', 'error', 'esperando_bbg'];
   if (!estado || !estadosValidos.includes(estado)) {
     return res.status(400).json({
       success: false,

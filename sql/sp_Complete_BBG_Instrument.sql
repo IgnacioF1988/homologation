@@ -56,7 +56,7 @@ BEGIN
                 CAST(cp.idInstrumentoOrigen AS NVARCHAR(50)) + '-' +
                 CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.subId'), cp.moneda) AS NVARCHAR(10))
             ) = bbg.pk2
-        WHERE cp.estado = 'en_proceso'
+        WHERE cp.estado = 'esperando_bbg'
           AND JSON_VALUE(cp.datosOrigen, '$.yieldSource') = 'BBG';
 
         SET @UpdatedCount = @@ROWCOUNT;

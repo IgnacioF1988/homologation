@@ -20,6 +20,7 @@ CREATE OR ALTER PROCEDURE [sandbox].[sp_Archive_Processed_Cashflows]
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;  -- Ensures automatic rollback on any error (including in nested SPs)
 
     DECLARE @ArchivedCount INT = 0;
     DECLARE @InsertedToStock INT = 0;
@@ -32,8 +33,21 @@ BEGIN
         -- Find instruments that:
         -- 1. Have cashflows imported to metrics.Cashflows
         -- 2. Have BBG characteristics enriched in datosOrigen (coco_bbg, callable_bbg, etc.)
-        -- 3. Are still in colaPendientes with estado = 'en_proceso'
+        -- 3. Are still in colaPendientes with estado = 'esperando_bbg'
+        -- 4. Are NOT currently being processed (no archive_started_at or it's stale > 1 hour)
         -- =====================================================================
+
+        -- First, mark records we're about to process to prevent concurrent runs
+        -- NOTE: coco_bbg, callable_bbg, sinkable_bbg are now OPTIONAL - only yas_yld_flag_bbg required
+        UPDATE sandbox.colaPendientes
+        SET datosOrigen = JSON_MODIFY(datosOrigen, '$.archive_started_at', CONVERT(NVARCHAR(30), GETDATE(), 126))
+        WHERE estado = 'esperando_bbg'
+          AND JSON_VALUE(datosOrigen, '$.yieldSource') = 'BBG'
+          AND JSON_VALUE(datosOrigen, '$.yas_yld_flag_bbg') IS NOT NULL
+          -- Not already being processed (or stale processing > 1 hour)
+          AND (JSON_VALUE(datosOrigen, '$.archive_started_at') IS NULL
+               OR DATEDIFF(MINUTE, TRY_CAST(JSON_VALUE(datosOrigen, '$.archive_started_at') AS DATETIME), GETDATE()) > 60);
+
         -- Build pk2 from colaPendientes to match against metrics.Cashflows
         ;WITH ProcessedInstruments AS (
             SELECT DISTINCT
@@ -48,13 +62,13 @@ BEGIN
                 CAST(cp.idInstrumentoOrigen AS NVARCHAR(50)) + '-' +
                     CAST(ISNULL(JSON_VALUE(cp.datosOrigen, '$.subId'), cp.moneda) AS NVARCHAR(10)) AS pk2
             FROM sandbox.colaPendientes cp
-            WHERE cp.estado = 'en_proceso'
+            WHERE cp.estado = 'esperando_bbg'
               AND JSON_VALUE(cp.datosOrigen, '$.yieldSource') = 'BBG'
-              -- Must have BBG characteristics enriched
-              AND JSON_VALUE(cp.datosOrigen, '$.coco_bbg') IS NOT NULL
-              AND JSON_VALUE(cp.datosOrigen, '$.callable_bbg') IS NOT NULL
-              AND JSON_VALUE(cp.datosOrigen, '$.sinkable_bbg') IS NOT NULL
+              -- Only yas_yld_flag_bbg is required; coco_bbg, callable_bbg, sinkable_bbg are optional
               AND JSON_VALUE(cp.datosOrigen, '$.yas_yld_flag_bbg') IS NOT NULL
+              -- Must have archive_started_at set by us (within last minute)
+              AND JSON_VALUE(cp.datosOrigen, '$.archive_started_at') IS NOT NULL
+              AND DATEDIFF(MINUTE, TRY_CAST(JSON_VALUE(cp.datosOrigen, '$.archive_started_at') AS DATETIME), GETDATE()) <= 1
         ),
         MatchedWithCashflows AS (
             SELECT DISTINCT
@@ -97,9 +111,28 @@ BEGIN
             SET @sinkable = JSON_VALUE(@datosOrigen, '$.sinkable_bbg');
             SET @yasYldFlag = JSON_VALUE(@datosOrigen, '$.yas_yld_flag_bbg');
 
-            -- Check if instrument already exists in stock.instrumentos
+            -- Log warning if any optional BBG characteristic is missing
+            IF @coco IS NULL OR @callable IS NULL OR @sinkable IS NULL
+            BEGIN
+                BEGIN TRY
+                    INSERT INTO logs.BBG_Log (log_level, message, details, created_at)
+                    VALUES ('WARNING',
+                            'Instrument archived with missing BBG characteristics',
+                            'idInstrumento=' + CAST(@idInstrumento AS NVARCHAR(10)) +
+                            ', moneda=' + CAST(@moneda AS NVARCHAR(10)) +
+                            ', coco=' + ISNULL(@coco, 'NULL') +
+                            ', callable=' + ISNULL(@callable, 'NULL') +
+                            ', sinkable=' + ISNULL(@sinkable, 'NULL'),
+                            GETDATE());
+                END TRY
+                BEGIN CATCH
+                    -- Ignore logging errors
+                END CATCH
+            END
+
+            -- Check if instrument already exists in stock.instrumentos (Inteligencia_Producto_Dev)
             IF EXISTS (
-                SELECT 1 FROM stock.instrumentos
+                SELECT 1 FROM Inteligencia_Producto_Dev.stock.instrumentos
                 WHERE idInstrumento = @idInstrumento
                   AND moneda = @moneda
                   AND Valid_To = @endDate
@@ -119,8 +152,8 @@ BEGIN
             END
             ELSE
             BEGIN
-                -- NEW: Insert directly to stock.instrumentos
-                INSERT INTO stock.instrumentos (
+                -- NEW: Insert directly to stock.instrumentos (Inteligencia_Producto_Dev)
+                INSERT INTO Inteligencia_Producto_Dev.stock.instrumentos (
                     idInstrumento, moneda, subId, nombreFuente, fuente,
                     investmentTypeCode, nameInstrumento, companyName, issuerTypeCode,
                     sectorGICS, issueTypeCode, sectorChileTypeCode, publicDataSource,

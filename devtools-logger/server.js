@@ -5,8 +5,8 @@ const path = require('path');
 const app = express();
 const PORT = 3002;
 
-// Servir archivos estáticos
-app.use(express.static('public'));
+// Servir archivos estáticos (usar path absoluto para evitar problemas de directorio)
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Crear servidor HTTP
 const HOST = '0.0.0.0'; // Escuchar en todas las interfaces

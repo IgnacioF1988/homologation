@@ -27,6 +27,7 @@ import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import SyncOutlinedIcon from '@mui/icons-material/SyncOutlined';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 import { api } from '../services/api';
@@ -293,6 +294,13 @@ const WorkQueue = forwardRef(({ onSelectItem, selectedItemId = null, resetOnMoun
         bg: colors.error.bg,
         textColor: '#991b1b',
         borderColor: 'rgba(239, 68, 68, 0.2)',
+      },
+      esperando_bbg: {
+        icon: <HourglassEmptyIcon sx={{ fontSize: 14 }} />,
+        label: 'Esperando BBG',
+        bg: 'rgba(139, 92, 246, 0.1)',
+        textColor: '#5b21b6',
+        borderColor: 'rgba(139, 92, 246, 0.2)',
       },
     };
     return configs[estado] || configs.pendiente;

@@ -50,7 +50,7 @@ export const FIXED_INCOME_CONFIG = {
       { id: 2, requiredFields: ['publicDataSource'], conditionalFields: { condition: 'isBBG', fields: ['isin'] } },
       { id: 3, requiredFields: ['companyName', 'issuerTypeCode', 'sectorGICS'] },
       { id: 4, requiredFields: ['issueCountry', 'riskCountry', 'issueCurrency', 'riskCurrency'], conditionalFields: { condition: 'isChile', fields: ['sectorChileTypeCode'] } },
-      { id: 5, requiredFields: ['couponTypeCode', 'yieldType', 'yieldSource', 'perpetuidad', 'rendimiento', 'couponFrequency'], conditionalFields: { condition: 'isYieldSourceBBG', fields: ['coco', 'callable', 'sinkable'] } },
+      { id: 5, requiredFields: ['couponTypeCode', 'yieldType', 'yieldSource', 'perpetuidad', 'rendimiento', 'couponFrequency'], conditionalFields: { condition: 'isYieldSourceBBG', fields: ['override'] } },
     ],
   },
 

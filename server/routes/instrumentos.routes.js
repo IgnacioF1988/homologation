@@ -145,7 +145,7 @@ router.get('/check-duplicate', async (req, res) => {
   }
 
   // Campos válidos para verificar duplicados (nombres reales de columnas en BD)
-  const validFields = ['isin', 'cusip', 'sedol', 'tickerBBG', 'idInstrumento'];
+  const validFields = ['isin', 'cusip', 'sedol', 'tickerBBG', 'idInstrumento', 'nameInstrumento'];
   if (!validFields.includes(field)) {
     return res.status(400).json({
       success: false,
@@ -620,6 +620,9 @@ router.put('/:id/:moneda', async (req, res) => {
       'idPredecesor', 'monedaPredecesor', 'subId'
     ];
 
+    // Campos que son NCHAR(1) - booleanos como 'S'/'N'
+    const nchar1Fields = ['esReestructuracion', 'emisionNacional', 'perpetuidad', 'rendimiento', 'coco', 'callable', 'sinkable'];
+
     updateableFields.forEach(field => {
       // Ignorar valores undefined
       if (data[field] === undefined) return;
@@ -629,6 +632,17 @@ router.put('/:id/:moneda', async (req, res) => {
       // Para campos FK, convertir strings vacíos a null
       if (fkFields.includes(field) && (value === '' || value === null)) {
         value = null;
+      }
+
+      // Campos NCHAR(1): convertir valores numéricos/booleanos a 'S'/'N'
+      if (nchar1Fields.includes(field)) {
+        if (value === '' || value === null || value === false || value === 'false') {
+          value = null; // NULL en lugar de omitir para UPDATE
+        } else {
+          // Convertir true/1/2/'S' a 'S' o 'N'
+          // ID 1 = 'S' (Sí), ID 2 = 'N' (No) en cat.booleanValues
+          value = (value === true || value === 'true' || value === 1 || value === '1' || value === 'S') ? 'S' : 'N';
+        }
       }
 
       setClauses.push(`${field} = @${field}`);
@@ -643,6 +657,9 @@ router.put('/:id/:moneda', async (req, res) => {
       } else if (field.includes('fecha')) {
         // Campos DATETIME
         request.input(field, sql.DateTime, value ? new Date(value) : null);
+      } else if (nchar1Fields.includes(field)) {
+        // Campos NCHAR(1) - booleanos
+        request.input(field, sql.NChar(1), value);
       } else {
         // Campos NVARCHAR
         request.input(field, sql.NVarChar, value);
@@ -692,10 +709,32 @@ router.post('/:id/:moneda/version', async (req, res) => {
   console.log('[POST /instrumentos/version] Versionando instrumento:', id, moneda);
   console.log('[POST /instrumentos/version] Datos recibidos:', JSON.stringify(data, null, 2));
 
+  // Campos que son NCHAR(1) - booleanos como 'S'/'N'
+  const nchar1Fields = ['esReestructuracion', 'emisionNacional', 'perpetuidad', 'rendimiento', 'coco', 'callable', 'sinkable'];
+
+  // IMPORTANTE: Convertir NCHAR(1) fields en data ANTES de usarlos
+  // Los dropdowns envían IDs numéricos (1=Sí, 2=No) que deben ser 'S'/'N'
+  nchar1Fields.forEach(field => {
+    if (data[field] !== undefined) {
+      const value = data[field];
+      if (value === '' || value === null || value === false || value === 'false') {
+        data[field] = null;
+      } else {
+        // ID 1 = 'S' (Sí), ID 2 = 'N' (No) en cat.booleanValues
+        data[field] = (value === true || value === 'true' || value === 1 || value === '1' || value === 'S') ? 'S' : 'N';
+      }
+    }
+  });
+
+  console.log('[POST /instrumentos/version] Datos después de conversión NCHAR(1):', JSON.stringify(data, null, 2));
+
+  let transaction;
+
   try {
     const pool = await getPool();
 
-    // 1. Obtener el registro actual
+    // 1. Obtener el registro actual (ANTES de iniciar transacción)
+    console.log('[POST /instrumentos/version] Buscando en stock.instrumentos:', { id, moneda });
     const currentResult = await pool.request()
       .input('id', sql.Int, parseInt(id))
       .input('moneda', sql.Int, parseInt(moneda))
@@ -705,7 +744,20 @@ router.post('/:id/:moneda/version', async (req, res) => {
         AND Valid_To = '2050-12-31'
       `);
 
+    console.log('[POST /instrumentos/version] Registros encontrados:', currentResult.recordset.length);
+
     if (currentResult.recordset.length === 0) {
+      // Debug: check if exists with any Valid_To
+      const debugResult = await pool.request()
+        .input('id', sql.Int, parseInt(id))
+        .input('moneda', sql.Int, parseInt(moneda))
+        .query(`
+          SELECT idInstrumento, moneda, Valid_From, Valid_To
+          FROM stock.instrumentos
+          WHERE idInstrumento = @id AND moneda = @moneda
+        `);
+      console.log('[POST /instrumentos/version] Debug - registros con cualquier Valid_To:', debugResult.recordset);
+
       return res.status(404).json({
         success: false,
         error: `Instrumento con id '${id}' y moneda '${moneda}' no encontrado o ya versionado`,
@@ -715,27 +767,14 @@ router.post('/:id/:moneda/version', async (req, res) => {
     const currentRecord = currentResult.recordset[0];
     console.log('[POST /instrumentos/version] Registro actual encontrado');
 
-    // 2. Cerrar la versión actual (Valid_To = ayer)
+    // Calcular yesterday antes de la transacción
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
 
-    await pool.request()
-      .input('id', sql.Int, parseInt(id))
-      .input('moneda', sql.Int, parseInt(moneda))
-      .input('yesterday', sql.Date, yesterday)
-      .query(`
-        UPDATE stock.instrumentos
-        SET Valid_To = @yesterday
-        WHERE idInstrumento = @id AND moneda = @moneda
-        AND Valid_To = '2050-12-31'
-      `);
-
-    console.log('[POST /instrumentos/version] Versión anterior cerrada');
-
-    // 3. Preparar los datos para la nueva versión
+    // Preparar los datos para la nueva versión
     const newRecord = { ...currentRecord };
 
-    // Aplicar los cambios del formulario
+    // Aplicar los cambios del formulario (data ya tiene NCHAR(1) convertidos)
     const updateableFields = [
       'nombreFuente', 'fuente', 'subId',
       'investmentTypeCode', 'nameInstrumento', 'companyName', 'issuerTypeCode',
@@ -755,8 +794,31 @@ router.post('/:id/:moneda/version', async (req, res) => {
       }
     });
 
-    // 4. Insertar la nueva versión
-    const insertRequest = pool.request();
+    // =========================================================================
+    // INICIAR TRANSACCIÓN - UPDATE y INSERT deben ser atómicos
+    // Si INSERT falla, UPDATE se revierte automáticamente
+    // =========================================================================
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    console.log('[POST /instrumentos/version] Transacción iniciada');
+
+    // 2. Cerrar la versión actual (Valid_To = ayer) - DENTRO DE TRANSACCIÓN
+    const updateRequest = new sql.Request(transaction);
+    await updateRequest
+      .input('id', sql.Int, parseInt(id))
+      .input('moneda', sql.Int, parseInt(moneda))
+      .input('yesterday', sql.Date, yesterday)
+      .query(`
+        UPDATE stock.instrumentos
+        SET Valid_To = @yesterday
+        WHERE idInstrumento = @id AND moneda = @moneda
+        AND Valid_To = '2050-12-31'
+      `);
+
+    console.log('[POST /instrumentos/version] Versión anterior cerrada (pendiente commit)');
+
+    // 3. Insertar la nueva versión - DENTRO DE TRANSACCIÓN
+    const insertRequest = new sql.Request(transaction);
     insertRequest.input('idInstrumento', sql.Int, parseInt(id));
     insertRequest.input('moneda', sql.Int, parseInt(moneda));
 
@@ -767,6 +829,8 @@ router.post('/:id/:moneda/version', async (req, res) => {
       'sectorChileTypeCode', 'tipoContinuador', 'issueCurrency', 'riskCurrency',
       'idPredecesor', 'monedaPredecesor', 'subId'
     ];
+
+    // nchar1Fields ya está definido arriba (línea 713)
 
     const insertFields = ['idInstrumento', 'moneda'];
     const insertValues = ['@idInstrumento', '@moneda'];
@@ -780,6 +844,16 @@ router.post('/:id/:moneda/version', async (req, res) => {
           return; // Skip empty FK fields
         }
 
+        // Campos NCHAR(1): convertir valores numéricos/booleanos a 'S'/'N'
+        if (nchar1Fields.includes(field)) {
+          if (value === '' || value === null || value === false || value === 'false') {
+            return; // Skip empty NCHAR(1) fields
+          }
+          // Convertir true/1/2/'S' a 'S' o 'N'
+          // ID 1 = 'S' (Sí), ID 2 = 'N' (No) en cat.booleanValues
+          value = (value === true || value === 'true' || value === 1 || value === '1' || value === 'S') ? 'S' : 'N';
+        }
+
         insertFields.push(field);
         insertValues.push(`@${field}`);
 
@@ -787,6 +861,9 @@ router.post('/:id/:moneda/version', async (req, res) => {
           insertRequest.input(field, sql.Int, value === '' ? null : (value !== null ? parseInt(value) : null));
         } else if (field === 'diaValidez') {
           insertRequest.input(field, sql.Date, value ? new Date(value) : null);
+        } else if (nchar1Fields.includes(field)) {
+          // Campos NCHAR(1) - booleanos
+          insertRequest.input(field, sql.NChar(1), value);
         } else {
           insertRequest.input(field, sql.NVarChar, value);
         }
@@ -805,9 +882,15 @@ router.post('/:id/:moneda/version', async (req, res) => {
     console.log('[POST /instrumentos/version] Insert query:', insertQuery);
     await insertRequest.query(insertQuery);
 
-    console.log('[POST /instrumentos/version] Nueva versión creada');
+    console.log('[POST /instrumentos/version] Nueva versión creada (pendiente commit)');
 
-    // 5. Obtener el registro actualizado
+    // =========================================================================
+    // COMMIT TRANSACCIÓN - Si llegamos aquí, UPDATE e INSERT fueron exitosos
+    // =========================================================================
+    await transaction.commit();
+    console.log('[POST /instrumentos/version] Transacción confirmada (commit)');
+
+    // 5. Obtener el registro actualizado (DESPUÉS del commit)
     const newVersionResult = await pool.request()
       .input('id', sql.Int, parseInt(id))
       .input('moneda', sql.Int, parseInt(moneda))
@@ -825,6 +908,19 @@ router.post('/:id/:moneda/version', async (req, res) => {
     });
   } catch (err) {
     console.error('Error versionando instrumento:', err);
+
+    // =========================================================================
+    // ROLLBACK TRANSACCIÓN - Si hubo error, revertir el UPDATE
+    // =========================================================================
+    if (transaction) {
+      try {
+        await transaction.rollback();
+        console.log('[POST /instrumentos/version] Transacción revertida (rollback)');
+      } catch (rollbackErr) {
+        console.error('[POST /instrumentos/version] Error en rollback:', rollbackErr);
+      }
+    }
+
     res.status(500).json({
       success: false,
       error: err.message,

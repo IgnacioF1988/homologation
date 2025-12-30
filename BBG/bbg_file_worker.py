@@ -1,8 +1,8 @@
 """
 Bloomberg File-Based Worker
 ============================
-This script reads jobs from a CSV file, fetches cashflows from Bloomberg,
-and writes results to another CSV file.
+This script reads jobs from a CSV file, fetches data from Bloomberg,
+and writes results to CSV files.
 
 No SQL connection required on Bloomberg machine!
 
@@ -11,15 +11,23 @@ Usage:
 
 Files used:
     - jobs.csv: Job queue (status: PENDING → RUNNING → COMPLETED/ERROR)
-    - cashflows.csv: Fetched cashflow data
+    - cashflows.csv: Fetched cashflow data (Fixed Income)
+    - equity_mktcaps.csv: Fetched market cap data (Equity)
+    - bond_characteristics.csv: Bond characteristics
     - logs/: Worker log files
 
-API Calls:
-    - Uses BATCHED Bloomberg API calls (4 calls per job, not per instrument)
+Instrument Types:
+    - FI (Fixed Income): Uses BDS for cashflows
+    - EQ (Equity): Uses BDH for historical market caps (CUR_MKT_CAP)
+
+API Calls (Fixed Income - 4 calls per job):
     - Call 1: Get currencies for all instruments (blp.bdp)
     - Call 2: Get bond characteristics - CoCo, callable, sinkable, yas_yld_flag (blp.bdp)
     - Call 3: Get cashflows for all instruments (blp.bds)
     - Call 4: Get FX rates for all unique currencies (blp.bdp)
+
+API Calls (Equity - 1 call per job):
+    - Call 1: Get historical market caps for all instruments (blp.bdh)
 """
 
 import os
@@ -28,9 +36,10 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Tuple
 import time
+from dateutil.relativedelta import relativedelta
 
 # File locking for concurrent access
 try:
@@ -57,11 +66,13 @@ SHARED_FOLDER = r"\\moneda03\Compartidos\Inteligencia de Negocios y Mercados\BBG
 
 JOBS_FILE = os.path.join(SHARED_FOLDER, "jobs.csv")
 CASHFLOWS_FILE = os.path.join(SHARED_FOLDER, "cashflows.csv")
+EQUITY_MKTCAPS_FILE = os.path.join(SHARED_FOLDER, "equity_mktcaps.csv")
 LOGS_FOLDER = os.path.join(SHARED_FOLDER, "logs")
 
 # Lock files for concurrent access
 JOBS_LOCK_FILE = os.path.join(SHARED_FOLDER, "jobs.csv.lock")
 CASHFLOWS_LOCK_FILE = os.path.join(SHARED_FOLDER, "cashflows.csv.lock")
+EQUITY_MKTCAPS_LOCK_FILE = os.path.join(SHARED_FOLDER, "equity_mktcaps.csv.lock")
 LOCK_TIMEOUT = 30  # seconds to wait for lock
 
 # Ensure logs folder exists
@@ -362,6 +373,85 @@ def save_bond_characteristics(characteristics: List[Dict], job_id: int):
         logger.error("Timeout waiting for bond_characteristics.csv lock")
     except Exception as e:
         logger.error(f"Error saving bond characteristics: {e}")
+
+
+def read_equity_mktcaps() -> pd.DataFrame:
+    """Read existing equity market caps from CSV file with file locking."""
+    empty_df = pd.DataFrame(columns=[
+        'pk2', 'ticker_bbg', 'trade_date', 'market_cap_usd',
+        'job_id', 'fetched_at'
+    ])
+    if not os.path.exists(EQUITY_MKTCAPS_FILE):
+        return empty_df
+    if os.path.getsize(EQUITY_MKTCAPS_FILE) == 0:
+        logger.debug("equity_mktcaps.csv exists but is empty")
+        return empty_df
+    try:
+        if FILELOCK_AVAILABLE:
+            lock = FileLock(EQUITY_MKTCAPS_LOCK_FILE, timeout=LOCK_TIMEOUT)
+            with lock:
+                return pd.read_csv(EQUITY_MKTCAPS_FILE)
+        else:
+            return pd.read_csv(EQUITY_MKTCAPS_FILE)
+    except Timeout:
+        logger.error(f"Timeout waiting for equity_mktcaps.csv lock")
+        return empty_df
+    except pd.errors.EmptyDataError:
+        logger.debug("equity_mktcaps.csv has no data")
+        return empty_df
+    except Exception as e:
+        logger.warning(f"Error reading equity_mktcaps.csv: {e}")
+        return empty_df
+
+
+def append_equity_mktcaps(new_mktcaps: List[Dict]):
+    """Append new equity market caps to CSV file, avoiding duplicates."""
+    logger.info(f"append_equity_mktcaps called with {len(new_mktcaps)} records")
+
+    if not new_mktcaps:
+        return 0, 0
+
+    existing = read_equity_mktcaps()
+    logger.debug(f"Existing mktcaps: {len(existing)}")
+    new_df = pd.DataFrame(new_mktcaps)
+    logger.debug(f"New mktcaps DataFrame shape: {new_df.shape}")
+
+    # Check for duplicates (same pk2 + trade_date)
+    if len(existing) > 0:
+        existing['key'] = existing['pk2'].astype(str) + '_' + existing['trade_date'].astype(str)
+        new_df['key'] = new_df['pk2'].astype(str) + '_' + new_df['trade_date'].astype(str)
+
+        duplicates = new_df['key'].isin(existing['key'])
+        skipped = duplicates.sum()
+        new_df = new_df[~duplicates]
+
+        new_df = new_df.drop(columns=['key'])
+        if 'key' in existing.columns:
+            existing = existing.drop(columns=['key'])
+    else:
+        skipped = 0
+
+    inserted = len(new_df)
+
+    if inserted > 0:
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        if 'job_id' in combined.columns:
+            combined['job_id'] = combined['job_id'].astype('Int64')
+        logger.info(f"Writing {len(combined)} total equity mktcaps to {EQUITY_MKTCAPS_FILE}")
+
+        try:
+            if FILELOCK_AVAILABLE:
+                lock = FileLock(EQUITY_MKTCAPS_LOCK_FILE, timeout=LOCK_TIMEOUT)
+                with lock:
+                    combined.to_csv(EQUITY_MKTCAPS_FILE, index=False)
+            else:
+                combined.to_csv(EQUITY_MKTCAPS_FILE, index=False)
+            logger.info(f"Successfully wrote equity mktcaps to file")
+        except Timeout:
+            logger.error(f"Timeout waiting for equity_mktcaps.csv lock during write")
+            raise
+
+    return inserted, skipped
 
 
 # =============================================================================
@@ -744,19 +834,171 @@ def fetch_fx_rates_batch(currencies: List[str], report_date) -> Dict[str, float]
     return result
 
 
+def fetch_equity_mktcaps_batch(instruments: List[Dict]) -> Dict[str, pd.DataFrame]:
+    """
+    Fetch historical market caps for Equity instruments using Bloomberg BDH.
+
+    Uses CUR_MKT_CAP field with daily granularity.
+    Date range: fecha_ingreso - 1 year to fecha_ingreso
+
+    Args:
+        instruments: List of dicts with pk2, ticker_bbg, fecha_ingreso
+
+    Returns:
+        Dict mapping pk2 -> DataFrame of market caps with columns:
+            - trade_date: Date of observation
+            - market_cap_usd: Market cap value
+    """
+    result = {}
+
+    if not BLOOMBERG_AVAILABLE:
+        logger.warning("Bloomberg not available, returning mock data")
+        for inst in instruments:
+            pk2 = inst.get('pk2')
+            if pk2:
+                result[pk2] = pd.DataFrame({
+                    'trade_date': [datetime.now().date()],
+                    'market_cap_usd': [1000000000.0]  # Mock 1B market cap
+                })
+        return result
+
+    if not instruments:
+        return result
+
+    # Group instruments by their date range
+    # Since each instrument might have different fecha_ingreso, we process them individually
+    # but could batch if they have the same date range
+    date_groups = {}
+    for inst in instruments:
+        pk2 = inst.get('pk2')
+        ticker = inst.get('ticker_bbg')
+        fecha_str = inst.get('fecha_ingreso')
+
+        if not pk2 or not ticker:
+            logger.warning(f"Skipping instrument with missing pk2/ticker: {inst}")
+            continue
+
+        try:
+            # Parse fecha_ingreso
+            if isinstance(fecha_str, str):
+                fecha_ingreso = pd.to_datetime(fecha_str).date()
+            elif isinstance(fecha_str, (datetime, date)):
+                fecha_ingreso = fecha_str if isinstance(fecha_str, date) else fecha_str.date()
+            else:
+                logger.warning(f"Invalid fecha_ingreso for {pk2}: {fecha_str}")
+                continue
+
+            # Calculate date range: fecha_ingreso - 1 year to fecha_ingreso
+            end_date = fecha_ingreso
+            start_date = fecha_ingreso - relativedelta(years=1)
+
+            # Group by date range for potential batching
+            date_key = (start_date, end_date)
+            if date_key not in date_groups:
+                date_groups[date_key] = []
+            date_groups[date_key].append({
+                'pk2': pk2,
+                'ticker': ticker
+            })
+
+        except Exception as e:
+            logger.error(f"Error parsing fecha_ingreso for {pk2}: {e}")
+            continue
+
+    # Process each date range group
+    for (start_date, end_date), group_instruments in date_groups.items():
+        tickers = [inst['ticker'] for inst in group_instruments]
+        pk2_map = {inst['ticker']: inst['pk2'] for inst in group_instruments}
+
+        logger.info(f"Fetching market caps for {len(tickers)} instruments from {start_date} to {end_date}")
+
+        try:
+            # BDH call for historical market cap
+            df = fetch_with_retry(
+                blp.bdh,
+                tickers,
+                "CUR_MKT_CAP",
+                start_date=start_date.strftime('%Y-%m-%d'),
+                end_date=end_date.strftime('%Y-%m-%d')
+            )
+
+            if df is not None and not df.empty:
+                logger.debug(f"BDH result shape: {df.shape}")
+                logger.debug(f"BDH columns: {df.columns.tolist()}")
+                logger.debug(f"BDH index: {df.index[:5] if len(df) > 0 else 'empty'}")
+
+                # BDH returns DataFrame with dates as index and tickers as columns
+                # Or MultiIndex columns if multiple fields (but we only have 1 field)
+                for ticker in tickers:
+                    pk2 = pk2_map[ticker]
+                    try:
+                        # Handle different DataFrame structures from blp.bdh
+                        if isinstance(df.columns, pd.MultiIndex):
+                            # MultiIndex columns: (ticker, field)
+                            if ticker in df.columns.get_level_values(0):
+                                # Get the field name (could be uppercase or lowercase)
+                                ticker_df = df[ticker]
+                                # Find the CUR_MKT_CAP column (case-insensitive)
+                                mktcap_col = None
+                                for col in ticker_df.columns:
+                                    if col.upper() == 'CUR_MKT_CAP':
+                                        mktcap_col = col
+                                        break
+                                if mktcap_col is None:
+                                    logger.warning(f"CUR_MKT_CAP column not found for {ticker}")
+                                    continue
+                                col_data = ticker_df[mktcap_col]
+                            else:
+                                logger.warning(f"Ticker {ticker} not found in results")
+                                continue
+                        elif ticker in df.columns:
+                            col_data = df[ticker]
+                        elif 'cur_mkt_cap' in df.columns or 'CUR_MKT_CAP' in df.columns:
+                            # Single ticker case - column is the field name
+                            col_name = 'CUR_MKT_CAP' if 'CUR_MKT_CAP' in df.columns else 'cur_mkt_cap'
+                            col_data = df[col_name]
+                        else:
+                            logger.warning(f"Could not find data for {ticker} in DataFrame")
+                            continue
+
+                        # Convert to list of records
+                        mktcap_records = []
+                        for trade_date, mktcap in col_data.items():
+                            if pd.notna(mktcap) and mktcap > 0:
+                                mktcap_records.append({
+                                    'trade_date': trade_date.date() if hasattr(trade_date, 'date') else trade_date,
+                                    'market_cap_usd': float(mktcap)
+                                })
+
+                        if mktcap_records:
+                            result[pk2] = pd.DataFrame(mktcap_records)
+                            logger.info(f"Got {len(mktcap_records)} market cap records for {pk2}")
+                        else:
+                            logger.warning(f"No valid market cap data for {pk2}")
+
+                    except Exception as e:
+                        logger.error(f"Error processing market cap for {pk2}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error fetching market caps for date range {start_date}-{end_date}: {e}")
+
+    logger.info(f"Fetched market caps for {len(result)} instruments")
+    return result
+
+
 # =============================================================================
 # MAIN WORKER LOGIC
 # =============================================================================
 
 def process_job(job: Dict) -> bool:
     """
-    Process a single job using BATCHED Bloomberg API calls.
+    Process a single job, routing to appropriate handler based on instrument type.
 
-    Total API calls: 4 (regardless of number of instruments)
-    1. Get currencies for all instruments
-    2. Get bond characteristics (CoCo, callable, sinkable, yas_yld_flag)
-    3. Get cashflows for all instruments (using characteristics)
-    4. Get FX rates for all unique currencies
+    Instrument types:
+    - FI (Fixed Income): Uses BDS for cashflows (4 API calls)
+    - EQ (Equity): Uses BDH for market caps (1 API call per date range)
+
+    For backward compatibility, jobs without instrument_type default to 'FI'.
     """
     job_id = None
     try:
@@ -795,8 +1037,139 @@ def process_job(job: Dict) -> bool:
                    completed_at=datetime.now().isoformat())
         return False
 
+    if not instruments:
+        error_msg = "No instruments in job"
+        logger.error(error_msg)
+        update_job(job_id, status='ERROR', error_message=error_msg,
+                   completed_at=datetime.now().isoformat())
+        return False
+
+    # Detect instrument type from first instrument
+    # Default to 'FI' for backward compatibility
+    instrument_type = instruments[0].get('instrument_type', 'FI')
+    logger.info(f"Job {job_id} instrument_type: {instrument_type}")
+
+    # Route to appropriate handler
+    if instrument_type == 'EQ':
+        return process_equity_job(job_id, instruments, report_date)
+    else:
+        # Default to Fixed Income processing
+        return process_fixed_income_job(job_id, instruments, report_date)
+
+
+def process_equity_job(job_id: int, instruments: List[Dict], report_date) -> bool:
+    """
+    Process an Equity job - fetch historical market caps using BDH.
+
+    API calls: 1 per unique date range (typically 1 if all instruments have same fechaIngreso)
+    """
+    logger.info(f"Processing Equity job {job_id} with {len(instruments)} instruments")
+
+    # Validate instruments
+    valid_instruments = []
+    for inst in instruments:
+        pk2 = inst.get('pk2')
+        ticker = inst.get('ticker_bbg')
+        fecha = inst.get('fecha_ingreso')
+
+        if pk2 and ticker and fecha:
+            valid_instruments.append(inst)
+        else:
+            logger.warning(f"Skipping instrument with missing pk2/ticker/fecha: {inst}")
+
+    if not valid_instruments:
+        error_msg = "No valid instruments found (need pk2, ticker_bbg, fecha_ingreso)"
+        logger.error(error_msg)
+        update_job(job_id, status='ERROR', error_message=error_msg,
+                   completed_at=datetime.now().isoformat())
+        return False
+
+    # Fetch market caps
+    update_job(job_id, progress=f"Fetching market caps for {len(valid_instruments)} instruments...")
+    mktcaps_by_pk2 = fetch_equity_mktcaps_batch(valid_instruments)
+
+    # Process results
+    all_mktcaps = []
+    instruments_fetched = 0
+    errors = []
+
+    for inst in valid_instruments:
+        pk2 = inst.get('pk2')
+        ticker = inst.get('ticker_bbg')
+
+        mktcap_df = mktcaps_by_pk2.get(pk2)
+        if mktcap_df is None or mktcap_df.empty:
+            errors.append(f"{pk2}: No market cap data returned")
+            continue
+
+        instruments_fetched += 1
+
+        for idx, row in mktcap_df.iterrows():
+            try:
+                trade_date = row['trade_date']
+                if hasattr(trade_date, 'isoformat'):
+                    trade_date = trade_date.isoformat()
+
+                all_mktcaps.append({
+                    'pk2': pk2,
+                    'ticker_bbg': ticker,
+                    'trade_date': trade_date,
+                    'market_cap_usd': row['market_cap_usd'],
+                    'job_id': job_id,
+                    'fetched_at': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.warning(f"Error processing market cap row for {pk2}: {e}")
+
+    # Write results
+    logger.info(f"Total market caps to write: {len(all_mktcaps)}")
+    if all_mktcaps:
+        try:
+            inserted, skipped = append_equity_mktcaps(all_mktcaps)
+            logger.info(f"Wrote {inserted} market caps to file, {skipped} duplicates skipped")
+        except Exception as e:
+            logger.error(f"Failed to write market caps: {e}", exc_info=True)
+            update_job(job_id, status='ERROR', error_message=f"Failed to write market caps: {e}",
+                       completed_at=datetime.now().isoformat())
+            return False
+    else:
+        logger.warning("No market caps to write!")
+
+    # Final status
+    if errors and instruments_fetched == 0:
+        error_summary = "; ".join(errors[:5])
+        if len(errors) > 5:
+            error_summary += f" ... and {len(errors) - 5} more errors"
+        update_job(job_id,
+                   status='ERROR',
+                   progress='Failed',
+                   instruments_fetched=instruments_fetched,
+                   instruments_skipped=0,
+                   error_message=error_summary,
+                   completed_at=datetime.now().isoformat())
+        return False
+    else:
+        update_job(job_id,
+                   status='COMPLETED',
+                   progress=f'Completed: {len(all_mktcaps)} market caps from {instruments_fetched} instruments',
+                   instruments_fetched=instruments_fetched,
+                   instruments_skipped=0,
+                   completed_at=datetime.now().isoformat())
+        return True
+
+
+def process_fixed_income_job(job_id: int, instruments: List[Dict], report_date) -> bool:
+    """
+    Process a Fixed Income job - fetch cashflows using BDS.
+
+    Total API calls: 4 (regardless of number of instruments)
+    1. Get currencies for all instruments
+    2. Get bond characteristics (CoCo, callable, sinkable, yas_yld_flag)
+    3. Get cashflows for all instruments (using characteristics)
+    4. Get FX rates for all unique currencies
+    """
     total_instruments = len(instruments)
-    logger.info(f"Job has {total_instruments} instruments to process")
+    logger.info(f"Processing Fixed Income job {job_id} with {total_instruments} instruments")
 
     # Build list of valid instruments
     valid_instruments = []

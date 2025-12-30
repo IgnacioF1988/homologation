@@ -41,9 +41,24 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import LinkIcon from '@mui/icons-material/Link';
 import AddLinkIcon from '@mui/icons-material/AddLink';
 import EditIcon from '@mui/icons-material/Edit';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { colors } from '../styles/theme';
 import { api } from '../services/api';
-import { isEquity, normalizeInvestmentType } from '../hooks';
+import { isEquity, isFixedIncome, normalizeInvestmentType } from '../hooks';
+
+// Helper: Detectar campos BBG faltantes para Fixed Income con yieldSource BBG
+const getMissingBBGFields = (instrument) => {
+  // Solo aplica a Fixed Income con yieldSource = BBG
+  if (!isFixedIncome(instrument.investmentTypeCode)) return null;
+  const isBBGYield = ['1', 1, 'BBG', 'Bloomberg'].includes(instrument.yieldSource);
+  if (!isBBGYield) return null;
+
+  const missing = [];
+  if (!instrument.coco) missing.push('coco');
+  if (!instrument.callable) missing.push('callable');
+  if (!instrument.sinkable) missing.push('sinkable');
+  return missing.length > 0 ? missing : null;
+};
 
 // Campos que NO se copian (pero se pasan como metadata de origen)
 const EXCLUDED_COPY_FIELDS = [
@@ -571,6 +586,8 @@ const SearchHelper = ({
                     const uniqueKey = `${instrument.idInstrumento}-${instrument.moneda}-${index}`;
                     const isSelected = selectedInstrument?.idInstrumento === instrument.idInstrumento &&
                       selectedInstrument?.moneda === instrument.moneda;
+                    const missingBBGFields = getMissingBBGFields(instrument);
+                    const hasMissingBBG = missingBBGFields && missingBBGFields.length > 0;
 
                     return (
                       <Box
@@ -579,13 +596,21 @@ const SearchHelper = ({
                         sx={{
                           p: 1.5,
                           borderRadius: '12px',
-                          border: `1px solid ${isSelected ? colors.primary.main : colors.border.light}`,
-                          backgroundColor: isSelected ? alpha(colors.primary.main, 0.04) : '#fff',
+                          border: `1px solid ${
+                            hasMissingBBG
+                              ? colors.warning.main
+                              : isSelected ? colors.primary.main : colors.border.light
+                          }`,
+                          backgroundColor: hasMissingBBG
+                            ? alpha(colors.warning.main, 0.06)
+                            : isSelected ? alpha(colors.primary.main, 0.04) : '#fff',
                           cursor: 'pointer',
                           transition: 'all 150ms ease',
                           '&:hover': {
-                            borderColor: colors.primary.light,
-                            backgroundColor: alpha(colors.primary.main, 0.02),
+                            borderColor: hasMissingBBG ? colors.warning.dark : colors.primary.light,
+                            backgroundColor: hasMissingBBG
+                              ? alpha(colors.warning.main, 0.1)
+                              : alpha(colors.primary.main, 0.02),
                           },
                         }}
                       >
@@ -652,10 +677,28 @@ const SearchHelper = ({
                         </Box>
 
                         {/* Info secundaria */}
-                        <Typography sx={{ fontSize: '0.7rem', color: colors.text.tertiary }}>
-                          {instrument.companyName || 'Sin compañía'}
-                          {instrument.isin && ` • ${instrument.isin}`}
-                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                          <Typography sx={{ fontSize: '0.7rem', color: colors.text.tertiary }}>
+                            {instrument.companyName || 'Sin compañía'}
+                            {instrument.isin && ` • ${instrument.isin}`}
+                          </Typography>
+                          {hasMissingBBG && (
+                            <Tooltip title={`Faltan: ${missingBBGFields.join(', ')}`} arrow>
+                              <Chip
+                                icon={<WarningAmberIcon sx={{ fontSize: '0.7rem !important' }} />}
+                                label={`BBG: ${missingBBGFields.join(', ')}`}
+                                size="small"
+                                sx={{
+                                  height: 18,
+                                  fontSize: '0.55rem',
+                                  backgroundColor: colors.warning.main,
+                                  color: '#fff',
+                                  '& .MuiChip-icon': { color: '#fff' },
+                                }}
+                              />
+                            </Tooltip>
+                          )}
+                        </Box>
 
                         {/* Detalle expandido */}
                         <Collapse in={isSelected}>

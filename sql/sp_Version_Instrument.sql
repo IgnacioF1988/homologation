@@ -24,6 +24,7 @@ CREATE OR ALTER PROCEDURE [sandbox].[sp_Version_Instrument]
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;  -- Ensures automatic rollback on any error
 
     DECLARE @today DATE = CAST(GETDATE() AS DATE);
     DECLARE @yesterday DATE = DATEADD(DAY, -1, @today);
@@ -34,8 +35,9 @@ BEGIN
 
         -- =====================================================================
         -- Step 1: Close the current version (set Valid_To = yesterday)
+        -- stock.instrumentos is in Inteligencia_Producto_Dev database
         -- =====================================================================
-        UPDATE stock.instrumentos
+        UPDATE Inteligencia_Producto_Dev.stock.instrumentos
         SET Valid_To = @yesterday,
             fechaModificacion = GETDATE()
         WHERE idInstrumento = @idInstrumento
@@ -51,8 +53,9 @@ BEGIN
         -- =====================================================================
         -- Step 2: Insert new version with updated data
         -- Parse datosOrigen JSON and merge with BBG data
+        -- stock.instrumentos is in Inteligencia_Producto_Dev database
         -- =====================================================================
-        INSERT INTO stock.instrumentos (
+        INSERT INTO Inteligencia_Producto_Dev.stock.instrumentos (
             idInstrumento, moneda, subId, nombreFuente, fuente,
             investmentTypeCode, nameInstrumento, companyName, issuerTypeCode,
             sectorGICS, issueTypeCode, sectorChileTypeCode, publicDataSource,
@@ -137,6 +140,24 @@ BEGIN
             @endDate    -- Valid_To = 2050-12-31
         ;
 
+        -- Verify the new version was created
+        IF @@ROWCOUNT = 0
+        BEGIN
+            RAISERROR('Failed to insert new version for idInstrumento=%d, moneda=%d', 16, 1, @idInstrumento, @moneda);
+        END
+
+        -- Log success
+        BEGIN TRY
+            INSERT INTO logs.BBG_Log (log_level, message, created_at)
+            VALUES ('INFO',
+                    'sp_Version_Instrument: created new version for idInstrumento=' +
+                    CAST(@idInstrumento AS NVARCHAR(10)) + ', moneda=' + CAST(@moneda AS NVARCHAR(10)),
+                    GETDATE());
+        END TRY
+        BEGIN CATCH
+            -- Ignore logging errors
+        END CATCH
+
         COMMIT TRANSACTION;
 
         SELECT 1 AS success, 'New version created' AS message;
@@ -148,6 +169,19 @@ BEGIN
         DECLARE @ErrorMessage NVARCHAR(4000) = ERROR_MESSAGE();
         DECLARE @ErrorSeverity INT = ERROR_SEVERITY();
         DECLARE @ErrorState INT = ERROR_STATE();
+
+        -- Log the error
+        BEGIN TRY
+            INSERT INTO logs.BBG_Log (log_level, message, details, created_at)
+            VALUES ('ERROR', 'sp_Version_Instrument failed',
+                    'idInstrumento=' + CAST(@idInstrumento AS NVARCHAR(10)) +
+                    ', moneda=' + CAST(@moneda AS NVARCHAR(10)) +
+                    ', error=' + @ErrorMessage,
+                    GETDATE());
+        END TRY
+        BEGIN CATCH
+            -- Ignore logging errors
+        END CATCH
 
         RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState);
     END CATCH

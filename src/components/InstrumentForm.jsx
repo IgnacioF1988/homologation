@@ -34,6 +34,7 @@ import {
   useSectionVisibility,
   isDerivative,
   isFixedIncome,
+  isEquity,
   useAssetTypeConfig,
 } from '../hooks';
 
@@ -185,6 +186,7 @@ const InstrumentForm = forwardRef(({
     isFormComplete,
     validateForm,
     clearErrors,
+    clearError,
   } = useFormValidation(formData, mode);
 
   // Hook de opciones de catalogos
@@ -334,8 +336,18 @@ const InstrumentForm = forwardRef(({
 
   // Manejar cambio de campos (con cascada y validacion)
   const handleFieldChange = useCallback((e) => {
+    const fieldName = e.target.name;
+    // Clear error for this field when it changes (allows button to unlock)
+    if (fieldName && formErrors[fieldName]) {
+      clearError(fieldName);
+    }
+    // Also clear _identifiers error when any identifier field changes
+    const identifierFields = ['isin', 'tickerBBG', 'sedol', 'cusip'];
+    if (identifierFields.includes(fieldName) && formErrors['_identifiers']) {
+      clearError('_identifiers');
+    }
     handleChangeWithCascade(e, formData.investmentTypeCode, formData);
-  }, [handleChangeWithCascade, formData.investmentTypeCode, formData]);
+  }, [handleChangeWithCascade, formData.investmentTypeCode, formData, formErrors, clearError]);
 
   // Manejar cambio de checkbox de reestructuracion
   const handleReestructuracionChange = useCallback(async (e) => {
@@ -397,12 +409,17 @@ const InstrumentForm = forwardRef(({
 
   // Manejar guardado
   const handleSubmit = useCallback(async () => {
-    // Validar formulario
-    const isValid = validateForm();
+    // Validar formulario - returns { isValid, errors }
+    const { isValid, errors: validationErrors } = validateForm();
     if (!isValid) {
+      // Get error field names for the message
+      const errorFields = Object.keys(validationErrors);
+
+      console.error('[handleSubmit] Validation failed:', { errors: validationErrors, errorFields });
+
       setNotification({
         open: true,
-        message: 'Por favor corrija los errores antes de guardar',
+        message: `Por favor corrija los errores: ${errorFields.join(', ')}`,
         severity: 'error',
       });
       return;
@@ -507,13 +524,20 @@ const InstrumentForm = forwardRef(({
         const isBBGFixedIncome = isFixedIncome(dataToSave.investmentTypeCode) &&
           (dataToSave.yieldSource === 'BBG' || dataToSave.yieldSource === 'Bloomberg');
 
-        if (isBBGFixedIncome && queueItemId) {
-          // Save to colaPendientes with datosOrigen, mark as completado
-          // The SP will later move it to stock.instrumentos after BBG enrichment
-          console.log('[handleSubmit] BBG Fixed Income - saving to colaPendientes');
+        // Check if this is BBG Equity from queue - also needs BBG processing
+        const isBBGEquity = isEquity(dataToSave.investmentTypeCode) &&
+          (dataToSave.publicDataSource === 'BBG' || dataToSave.publicDataSource === 'Bloomberg');
+
+        const needsBBGProcessing = isBBGFixedIncome || isBBGEquity;
+
+        if (needsBBGProcessing && queueItemId) {
+          // Save to colaPendientes with datosOrigen, mark as esperando_bbg
+          // sp_Process_Completed_Queue will create BBG job, then sp_Archive will move to stock.instrumentos
+          const bbgType = isBBGEquity ? 'BBG Equity' : 'BBG Fixed Income';
+          console.log(`[handleSubmit] ${bbgType} - saving to colaPendientes with estado esperando_bbg`);
           response = await api.colaPendientes.update(queueItemId, {
             datosOrigen: dataToSave,
-            estado: 'completado',
+            estado: 'esperando_bbg',
             idInstrumentoOrigen: dataToSave.idInstrumento,
           });
         } else {
@@ -525,19 +549,24 @@ const InstrumentForm = forwardRef(({
 
       if (response.success) {
         // For non-BBG instruments from queue, mark as completado
-        // (BBG Fixed Income already marked completado above)
+        // (BBG instruments already marked esperando_bbg above)
         const isBBGFixedIncomeFromQueue = isFixedIncome(dataToSave.investmentTypeCode) &&
           (dataToSave.yieldSource === 'BBG' || dataToSave.yieldSource === 'Bloomberg') && queueItemId;
+        const isBBGEquityFromQueue = isEquity(dataToSave.investmentTypeCode) &&
+          (dataToSave.publicDataSource === 'BBG' || dataToSave.publicDataSource === 'Bloomberg') && queueItemId;
+        const needsBBGFromQueue = isBBGFixedIncomeFromQueue || isBBGEquityFromQueue;
 
-        if (queueItemId && !isBBGFixedIncomeFromQueue) {
+        if (queueItemId && !needsBBGFromQueue) {
           await api.colaPendientes.updateEstado(queueItemId, 'completado');
         }
 
-        const successMessage = mode === 'modificar'
-          ? 'Instrumento versionado exitosamente. Se creó una nueva versión.'
-          : mode === 'exacta' || mode === 'parcial'
-            ? 'Instrumento actualizado exitosamente'
-            : 'Instrumento creado exitosamente';
+        const successMessage = needsBBGFromQueue
+          ? 'Instrumento esperando datos de Bloomberg'
+          : mode === 'modificar'
+            ? 'Instrumento versionado exitosamente. Se creó una nueva versión.'
+            : mode === 'exacta' || mode === 'parcial'
+              ? 'Instrumento actualizado exitosamente'
+              : 'Instrumento creado exitosamente';
 
         setNotification({
           open: true,

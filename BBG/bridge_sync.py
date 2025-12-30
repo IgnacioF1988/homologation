@@ -7,8 +7,9 @@ Runs on INTERMEDIARY machine that has access to both:
 
 Syncs files bidirectionally:
 - jobs.csv: local ↔ shared (bidirectional - new jobs AND status updates)
-- cashflows.csv: shared → local (when Bloomberg finishes processing)
+- cashflows.csv: shared → local (when Bloomberg finishes processing Fixed Income)
 - bond_characteristics.csv: shared → local (bond characteristics for analysis)
+- equity_mktcaps.csv: shared → local (when Bloomberg finishes processing Equity)
 
 Install: pip install watchdog filelock
 Run: python bridge_sync.py
@@ -53,9 +54,11 @@ POLL_INTERVAL_SECONDS = 5
 LOCAL_JOBS_LOCK = os.path.join(LOCAL_FOLDER, 'jobs.csv.lock')
 LOCAL_CASHFLOWS_LOCK = os.path.join(LOCAL_FOLDER, 'cashflows.csv.lock')
 LOCAL_CHARS_LOCK = os.path.join(LOCAL_FOLDER, 'bond_characteristics.csv.lock')
+LOCAL_EQUITY_MKTCAPS_LOCK = os.path.join(LOCAL_FOLDER, 'equity_mktcaps.csv.lock')
 SHARED_JOBS_LOCK = os.path.join(SHARED_FOLDER, 'jobs.csv.lock')
 SHARED_CASHFLOWS_LOCK = os.path.join(SHARED_FOLDER, 'cashflows.csv.lock')
 SHARED_CHARS_LOCK = os.path.join(SHARED_FOLDER, 'bond_characteristics.csv.lock')
+SHARED_EQUITY_MKTCAPS_LOCK = os.path.join(SHARED_FOLDER, 'equity_mktcaps.csv.lock')
 
 # Track last written content hash to detect external changes
 _last_written_hash = None
@@ -125,6 +128,11 @@ def get_cashflows_csv_headers():
 def get_bond_characteristics_csv_headers():
     """Return the header line for bond_characteristics.csv."""
     return 'pk2,isin,coco,callable,sinkable,yas_yld_flag,override,job_id,fetched_at'
+
+
+def get_equity_mktcaps_csv_headers():
+    """Return the header line for equity_mktcaps.csv."""
+    return 'pk2,ticker_bbg,trade_date,market_cap_usd,job_id,fetched_at'
 
 
 def is_empty_csv(content, headers):
@@ -381,6 +389,52 @@ def sync_bond_characteristics():
             log("[SYNC] WARNING: Failed to clear SHARED/bond_characteristics.csv")
 
 
+def sync_equity_mktcaps():
+    """
+    Sync equity_mktcaps.csv from SHARED to LOCAL, then clear SHARED.
+
+    Flow:
+    1. BBG worker writes market caps to SHARED/equity_mktcaps.csv
+    2. This sync copies SHARED → LOCAL
+    3. This sync clears SHARED (headers only) to prevent reprocessing
+    4. bloomberg.routes.js imports LOCAL to SQL via sp_Process_Equity_MktCaps_CSV
+    5. bloomberg.routes.js clears LOCAL (headers only)
+    """
+    src = os.path.join(SHARED_FOLDER, 'equity_mktcaps.csv')
+    dst = os.path.join(LOCAL_FOLDER, 'equity_mktcaps.csv')
+
+    if not os.path.exists(src):
+        return
+
+    src_content = read_file_safe(src, SHARED_EQUITY_MKTCAPS_LOCK)
+
+    # Skip if SHARED is empty (only headers)
+    headers = get_equity_mktcaps_csv_headers()
+    if is_empty_csv(src_content, headers):
+        return
+
+    dst_content = read_file_safe(dst, LOCAL_EQUITY_MKTCAPS_LOCK)
+
+    if normalize(src_content) != normalize(dst_content):
+        log("[SYNC] Copying equity_mktcaps.csv SHARED → LOCAL...")
+        if FILELOCK_AVAILABLE:
+            src_lock = FileLock(SHARED_EQUITY_MKTCAPS_LOCK, timeout=LOCK_TIMEOUT)
+            dst_lock = FileLock(LOCAL_EQUITY_MKTCAPS_LOCK, timeout=LOCK_TIMEOUT)
+            with src_lock:
+                with dst_lock:
+                    shutil.copy2(src, dst)
+        else:
+            shutil.copy2(src, dst)
+        log("[SYNC] equity_mktcaps.csv copied")
+
+        # Clear SHARED after successful copy (headers only)
+        clear_content = headers + '\n'
+        if write_file_safe(src, clear_content, SHARED_EQUITY_MKTCAPS_LOCK):
+            log("[SYNC] Cleared SHARED/equity_mktcaps.csv (headers only)")
+        else:
+            log("[SYNC] WARNING: Failed to clear SHARED/equity_mktcaps.csv")
+
+
 class FileChangeHandler(FileSystemEventHandler):
     """Handles file changes in both folders."""
 
@@ -388,6 +442,7 @@ class FileChangeHandler(FileSystemEventHandler):
         self.last_jobs_sync = 0
         self.last_cashflows_sync = 0
         self.last_chars_sync = 0
+        self.last_equity_mktcaps_sync = 0
 
     def on_modified(self, event):
         global _syncing
@@ -418,6 +473,13 @@ class FileChangeHandler(FileSystemEventHandler):
             log(f"[WATCH] bond_characteristics.csv changed, syncing...")
             sync_bond_characteristics()
 
+        elif filename == 'equity_mktcaps.csv' and SHARED_FOLDER in event.src_path:
+            if now - self.last_equity_mktcaps_sync < MIN_INTERVAL_SECONDS:
+                return
+            self.last_equity_mktcaps_sync = now
+            log(f"[WATCH] equity_mktcaps.csv changed, syncing...")
+            sync_equity_mktcaps()
+
     def on_created(self, event):
         self.on_modified(event)
 
@@ -427,6 +489,7 @@ def periodic_sync():
     sync_jobs_csv()
     sync_cashflows()
     sync_bond_characteristics()
+    sync_equity_mktcaps()
 
 
 def main():
