@@ -78,20 +78,22 @@ class TrackingService {
     // Servicio iniciado -> actualizar estado a EN_PROGRESO
     pipelineEvents.on('servicio:inicio', async (data) => {
       try {
+        console.log(`[TrackingService] servicio:inicio - ${data.servicio} (ejecucion=${data.idEjecucion})`);
         await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'EN_PROGRESO');
         this._notifyWebSocket('SERVICIO_INICIO', data);
       } catch (err) {
-        // Error silencioso - no interrumpir el pipeline por fallo de tracking
+        console.error(`[TrackingService] Error en servicio:inicio:`, err.message);
       }
     });
 
     // Servicio terminado OK -> actualizar estado a OK
     pipelineEvents.on('servicio:fin', async (data) => {
       try {
+        console.log(`[TrackingService] servicio:fin - ${data.servicio} (ejecucion=${data.idEjecucion})`);
         await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'OK');
         this._notifyWebSocket('SERVICIO_FIN', data);
       } catch (err) {
-        // Error silencioso
+        console.error(`[TrackingService] Error en servicio:fin:`, err.message);
       }
     });
 
@@ -149,7 +151,7 @@ class TrackingService {
     // EVENTOS DE STAND-BY
     // =============================================
 
-    // Stand-by activado -> actualizar estado + registrar stand-by + evento
+    // Stand-by activado -> actualizar estado + registrar stand-by + evento + sandbox
     pipelineEvents.on('standby:activado', async (data) => {
       try {
         await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'STAND_BY');
@@ -165,9 +167,19 @@ class TrackingService {
           data.detalles
         );
         await this._updateFlagsProblema(data.idEjecucion, data.detalles.tipoProblema);
+
+        // Escribir datos de homologación a sandbox (si existen)
+        const homologData = data.detalles.homologacionData;
+        console.log(`[TrackingService] standby:activado - homologacionData length: ${homologData?.length || 0}`);
+        if (homologData && homologData.length > 0) {
+          console.log(`[TrackingService] Escribiendo ${homologData.length} items a sandbox...`);
+          await this._escribirHomologacionSandbox(data.idEjecucion, homologData);
+          console.log(`[TrackingService] Sandbox escrito OK`);
+        }
+
         this._notifyWebSocket('STANDBY_ACTIVADO', data);
       } catch (err) {
-        // Error silencioso
+        console.error(`[TrackingService] Error en standby:activado:`, err.message);
       }
     });
 
@@ -547,6 +559,65 @@ class TrackingService {
         UPDATE logs.Ejecuciones
         SET ${columna} = 1
         WHERE ID_Ejecucion = @idEjecucion
+      `);
+    }
+  }
+
+  /**
+   * Escribe datos de homologación al schema sandbox
+   * @param {number} idEjecucion - ID de la ejecución
+   * @param {Array} homologacionData - Datos de homologación del SP
+   * @private
+   */
+  async _escribirHomologacionSandbox(idEjecucion, homologacionData) {
+    // Obtener FechaReporte desde el proceso
+    const fechaResult = await this.pool.request()
+      .input('idEjecucion', sql.BigInt, idEjecucion)
+      .query(`
+        SELECT CONVERT(VARCHAR(10), p.FechaReporte, 120) AS FechaReporte
+        FROM logs.Ejecuciones e
+        INNER JOIN logs.Procesos p ON e.ID_Proceso = p.ID_Proceso
+        WHERE e.ID_Ejecucion = @idEjecucion
+      `);
+
+    const fechaReporte = fechaResult.recordset[0]?.FechaReporte || new Date().toISOString().split('T')[0];
+    const fechaProceso = new Date().toISOString();
+
+    // Agrupar por tipo de homologación
+    const fondos = homologacionData.filter(h => h.TipoHomologacion === 'FONDO');
+    const instrumentos = homologacionData.filter(h => h.TipoHomologacion === 'INSTRUMENTO');
+    const monedas = homologacionData.filter(h => h.TipoHomologacion === 'MONEDA');
+
+    // Insertar fondos no homologados (bulk)
+    if (fondos.length > 0) {
+      const fondosValues = fondos.map(item =>
+        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}')`
+      ).join(',\n');
+      await this.pool.request().query(`
+        INSERT INTO sandbox.Homologacion_Fondos (FechaReporte, Fondo, Source, FechaProceso)
+        VALUES ${fondosValues}
+      `);
+    }
+
+    // Insertar instrumentos no homologados (bulk)
+    if (instrumentos.length > 0) {
+      const instValues = instrumentos.map(item =>
+        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}', '${(item.Currency || '').replace(/'/g, "''")}')`
+      ).join(',\n');
+      await this.pool.request().query(`
+        INSERT INTO sandbox.Homologacion_Instrumentos (FechaReporte, Instrumento, Source, FechaProceso, Currency)
+        VALUES ${instValues}
+      `);
+    }
+
+    // Insertar monedas no homologadas (bulk)
+    if (monedas.length > 0) {
+      const monedasValues = monedas.map(item =>
+        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}')`
+      ).join(',\n');
+      await this.pool.request().query(`
+        INSERT INTO sandbox.Homologacion_Monedas (FechaReporte, Moneda, Source, FechaProceso)
+        VALUES ${monedasValues}
       `);
     }
   }

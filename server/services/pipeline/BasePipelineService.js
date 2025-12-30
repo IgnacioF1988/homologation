@@ -266,6 +266,12 @@ class BasePipelineService {
         8: 'DESCUADRES_GENERAL'
       };
 
+      // Capturar recordset con datos de homologación (si existe)
+      // El SP retorna: TipoHomologacion, Item, Currency, Source, Detalle
+      const homologacionData = result.recordset && result.recordset.length > 0
+        ? result.recordset
+        : [];
+
       pipelineEvents.emitStandByActivado(
         idEjecucion,
         fund.ID_Fund,
@@ -273,9 +279,10 @@ class BasePipelineService {
         this.id,
         {
           tipoProblema: standByTypes[returnValue],
-          cantidad: errorCount || 1,
+          cantidad: errorCount || homologacionData.length || 1,
           puntoBloqueo: spName,
-          motivo: `Stand-by activado por ${spName}`
+          motivo: `Stand-by activado por ${spName}`,
+          homologacionData: homologacionData
         }
       );
 

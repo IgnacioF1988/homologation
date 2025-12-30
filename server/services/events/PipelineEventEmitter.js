@@ -153,7 +153,8 @@ class PipelineEventEmitter extends EventEmitter {
         cantidad: detalles.cantidad || 1,
         tablaReferencia: detalles.tablaReferencia || null,
         motivo: detalles.motivo || null,
-        puntoBloqueo: detalles.puntoBloqueo || null
+        puntoBloqueo: detalles.puntoBloqueo || null,
+        homologacionData: detalles.homologacionData || []
       },
       timestamp: new Date()
     });
