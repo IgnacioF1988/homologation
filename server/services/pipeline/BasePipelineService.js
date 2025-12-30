@@ -844,6 +844,54 @@ class BasePipelineService {
       this.id,
       `⏸️ Stand-by activado por ${spName}: ${tipoStandBy} (código ${returnValue})`
     );
+
+    // Registrar en logs.FondosEnStandBy
+    await this._registrarFondoStandBy(idEjecucion, fund.ID_Fund, tipoStandBy, spName, this.id);
+  }
+
+  /**
+   * Registrar fondo en stand-by en logs.FondosEnStandBy
+   * @private
+   */
+  async _registrarFondoStandBy(idEjecucion, idFund, tipoProblema, spName, servicioActual) {
+    try {
+      // Usar this.pool.request() como registerFundProblem
+      const request = this.pool.request();
+
+      // Verificar si ya existe registro para este fondo/ejecucion
+      const checkResult = await request
+        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+        .input('ID_Fund', sql.Int, idFund)
+        .query(`
+          SELECT ID_StandBy FROM logs.FondosEnStandBy
+          WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund
+        `);
+
+      if (checkResult.recordset.length === 0) {
+        // Insertar nuevo registro (nuevo request para evitar conflictos de inputs)
+        const insertRequest = this.pool.request();
+        await insertRequest
+          .input('ID_Ejecucion', sql.BigInt, idEjecucion)
+          .input('ID_Fund', sql.Int, idFund)
+          .input('TipoProblema', sql.NVarChar(100), tipoProblema)
+          .input('MotivoDetallado', sql.NVarChar(500), `Stand-by activado por ${spName}`)
+          .input('Estado', sql.NVarChar(50), 'PENDIENTE')
+          .input('PuntoBloqueo', sql.NVarChar(100), servicioActual)
+          .input('ServicioSiguiente', sql.NVarChar(100), null)
+          .input('CantidadProblemas', sql.Int, 1)
+          .input('ProblemasResueltos', sql.Int, 0)
+          .query(`
+            INSERT INTO logs.FondosEnStandBy
+            (ID_Ejecucion, ID_Fund, TipoProblema, MotivoDetallado, Estado,
+             PuntoBloqueo, ServicioSiguiente, CantidadProblemas, ProblemasResueltos, FechaDeteccion)
+            VALUES
+            (@ID_Ejecucion, @ID_Fund, @TipoProblema, @MotivoDetallado, @Estado,
+             @PuntoBloqueo, @ServicioSiguiente, @CantidadProblemas, @ProblemasResueltos, GETDATE())
+          `);
+      }
+    } catch (err) {
+      console.error(`Error registrando stand-by para fondo ${idFund}:`, err.message);
+    }
   }
 
   /**
