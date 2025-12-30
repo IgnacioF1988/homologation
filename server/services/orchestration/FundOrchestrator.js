@@ -148,7 +148,7 @@ class FundOrchestrator {
   }
 
   /**
-   * Ejecutar el pipeline completo (parallel/sequential)
+   * Ejecutar el pipeline completo (batch/parallel/sequential)
    */
   async execute() {
     const fund = this.fondos[0];
@@ -157,9 +157,9 @@ class FundOrchestrator {
       pipelineEvents.emitEjecucionInicio(this.idEjecucion, fund.ID_Fund, fund.FundShortName);
 
       for (const phase of this.executionPlan) {
-        if (phase.type === 'batch') continue; // Ya ejecutado
-
-        if (phase.type === 'parallel') {
+        if (phase.type === 'batch') {
+          await this._executeBatchPhase(phase, fund);
+        } else if (phase.type === 'parallel') {
           await this._executeParallelPhase(phase);
         } else if (phase.type === 'sequential') {
           await this._executeSequentialPhase(phase);
@@ -191,7 +191,7 @@ class FundOrchestrator {
    * Ejecutar fase BATCH
    * @private
    */
-  async _executeBatchPhase(phase) {
+  async _executeBatchPhase(phase, fund) {
     for (const serviceId of phase.services) {
       const service = this.serviceInstances.get(serviceId);
       if (!service) continue;
@@ -200,7 +200,7 @@ class FundOrchestrator {
         idEjecucion: this.idEjecucion,
         idProceso: this.idProceso,
         fechaReporte: this.fechaReporte,
-        fund: null
+        fund: fund
       };
 
       await service.execute(context);
@@ -411,7 +411,7 @@ class FundOrchestrator {
     const onError = service.config.onError || 'STOP_ALL';
     const policy = onError === 'LOG_WARNING' ? 'CONTINUE' : onError;
 
-    pipelineEvents.emitServicioError(this.idEjecucion, fund.ID_Fund, service.id, error);
+    // NOTA: No emitir error aquí - ya fue emitido por BasePipelineService.handleError()
 
     if (policy === 'STOP_ALL') {
       throw error;

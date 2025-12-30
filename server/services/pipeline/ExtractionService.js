@@ -36,23 +36,41 @@ class ExtractionService {
   async execute(context) {
     const { idEjecucion, idProceso, fechaReporte, fund } = context;
 
-    // MODO BATCH: Procesa todos los fondos a la vez
+    // MODO BATCH: Procesa todos los fondos a la vez, pero emite eventos por fondo
     if (this.config.type === 'batch') {
       const batchKey = `${idProceso}_${this.id}`;
+      const startTime = Date.now();
 
-      if (ExtractionService.batchExecutionTracker.has(batchKey)) {
-        return await ExtractionService.batchExecutionTracker.get(batchKey);
+      // Emitir inicio para ESTE fondo
+      pipelineEvents.emitServicioInicio(idEjecucion, fund.ID_Fund, this.id, {
+        portfolio: fund.Portfolio_Geneva,
+        fundName: fund.FundShortName,
+        mode: 'batch'
+      });
+
+      // Ejecutar batch solo una vez (el primero ejecuta, los demás esperan)
+      if (!ExtractionService.batchExecutionTracker.has(batchKey)) {
+        const executionPromise = this._executeBatchMode(idProceso, fechaReporte);
+        ExtractionService.batchExecutionTracker.set(batchKey, executionPromise);
+
+        // Limpiar tracker después de 5 minutos
+        setTimeout(() => {
+          ExtractionService.batchExecutionTracker.delete(batchKey);
+        }, 300000);
       }
 
-      const executionPromise = this._executeBatchMode(idProceso, fechaReporte);
-      ExtractionService.batchExecutionTracker.set(batchKey, executionPromise);
+      const result = await ExtractionService.batchExecutionTracker.get(batchKey);
+      const duration = Date.now() - startTime;
 
-      const result = await executionPromise;
-
-      // Limpiar tracker después de 5 minutos
-      setTimeout(() => {
-        ExtractionService.batchExecutionTracker.delete(batchKey);
-      }, 300000);
+      // Emitir fin para ESTE fondo
+      if (result.success) {
+        pipelineEvents.emitServicioFin(idEjecucion, fund.ID_Fund, this.id, duration, {
+          mode: 'batch',
+          extractedSources: result.extractedSources?.length || 0
+        });
+      } else {
+        pipelineEvents.emitServicioError(idEjecucion, fund.ID_Fund, this.id, result.error || new Error('Batch extraction failed'));
+      }
 
       return result;
     }
