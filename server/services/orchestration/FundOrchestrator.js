@@ -1,52 +1,12 @@
 /**
  * FundOrchestrator - Orquestador de Ejecución del Pipeline para un Fondo
  *
- * Coordina la ejecución de todos los servicios del pipeline para UN SOLO FONDO,
- * respetando dependencias y manejando errores según políticas configuradas.
+ * ARQUITECTURA EVENT-DRIVEN:
+ * - Coordina ejecución de servicios para UN SOLO FONDO
+ * - Emite eventos via PipelineEventEmitter
+ * - TrackingService escucha y persiste automáticamente
  *
- * RECIBE:
- * - idEjecucion: ID único de la ejecución del fondo (BigInt)
- * - idProceso: ID del proceso padre que agrupa múltiples fondos (BigInt)
- * - fechaReporte: Fecha a procesar (YYYY-MM-DD)
- * - fondos: Array con 1 solo fondo [{ID_Fund, Portfolio_Geneva, ...}]
- * - pool: Pool de conexiones SQL Server (compartido entre orquestadores)
- * - tracker: ExecutionTracker compartido entre orquestadores
- * - logger: LoggingService compartido
- * - trace: TraceService compartido (opcional)
- *
- * PROCESA:
- * 1. Carga pipeline.config.yaml (servicios y dependencias)
- * 2. Resuelve orden topológico con DependencyResolver (algoritmo de Kahn)
- * 3. Agrupa servicios por tipo: batch (1 vez), parallel (por fondo), sequential (1 vez)
- * 4. Instancia servicios: IPAService, CAPMService, PNLService, DerivadosService, UBSService
- * 5. Ejecuta fases del pipeline:
- *    - Batch: EXTRACCION, TAGGING, VALIDACION (1 vez por fecha)
- *    - Parallel: IPA, CAPM, Derivados, PNL, UBS (aislado por fondo)
- *    - Sequential: CONSOLIDACION, EXPORTACION (1 vez por fecha)
- * 6. Verifica exclusión automática (sandbox.Fondos_Problema)
- * 7. Verifica stand-by antes de cada servicio (códigos 5-8)
- * 8. Maneja errores según política:
- *    - STOP_ALL: detiene todos los fondos del proceso (deadlock crítico)
- *    - STOP_FUND: detiene solo este fondo (error de datos)
- *    - CONTINUE: registra error pero continúa (derivados/UBS opcionales)
- *
- * ENVIA:
- * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos → WebSocket (tiempo real)
- * - Logs a: LoggingService → logs.Ejecucion_Logs
- * - Trace records a: TraceService → logs.Trace_Records (análisis de performance)
- * - Resultado final a: procesos.v2.routes.js → {success, duration, failedFunds}
- *
- * DEPENDENCIAS:
- * - Requiere: pipeline.config.yaml, DependencyResolver, servicios del pipeline
- * - Requerido por: procesos.v2.routes.js (ejecuta N orquestadores en paralelo con Promise.all)
- *
- * CONTEXTO PARALELO:
- * - Arquitectura jerárquica: 1 Orquestador = 1 Fondo = 1 ID_Ejecucion
- * - Múltiples orquestadores ejecutan en paralelo (Promise.all, concurrencia ilimitada)
- * - Cada fondo aislado: propia conexión SQL, propias temp tables (#temp_*_[ID_Ejecucion]_[ID_Fund])
- * - Sin contención: RCSI habilitado + tablas temporales únicas por fondo
- * - Validación defensiva: ID_Ejecucion > 0 y ID_Fund > 0 previenen race conditions
- * - Stand-by per-fund: un fondo en stand-by NO detiene a otros fondos
+ * @module FundOrchestrator
  */
 
 const yaml = require('js-yaml');
@@ -55,125 +15,77 @@ const path = require('path');
 const sql = require('mssql');
 const pLimit = require('p-limit');
 const DependencyResolver = require('./DependencyResolver');
+const pipelineEvents = require('../events/PipelineEventEmitter');
 
 class FundOrchestrator {
   /**
    * Constructor del Orquestador
-   *
-   * @param {BigInt} idEjecucion - ID de la ejecución en logs.Ejecuciones
-   * @param {BigInt} idProceso - ID del proceso padre en logs.Procesos
+   * @param {BigInt} idEjecucion - ID de la ejecución
+   * @param {BigInt} idProceso - ID del proceso padre
    * @param {String} fechaReporte - Fecha a procesar (YYYY-MM-DD)
-   * @param {Array} fondos - Array de fondos [{ID_Fund: INT, Portfolio_Geneva, ...}]
+   * @param {Array} fondos - Array con 1 fondo
    * @param {Object} pool - Connection pool de SQL Server
-   * @param {Object} tracker - ExecutionTracker para actualizar estados
-   * @param {Object} logger - LoggingService para registrar eventos
-   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(idEjecucion, idProceso, fechaReporte, fondos, pool, tracker, logger, trace = null) {
-    // Validación: arquitectura jerárquica requiere 1 fondo por orquestador
+  constructor(idEjecucion, idProceso, fechaReporte, fondos, pool) {
     if (!Array.isArray(fondos) || fondos.length !== 1) {
-      throw new Error(
-        `FundOrchestrator debe recibir exactamente 1 fondo. ` +
-        `Recibió ${fondos ? fondos.length : 0}. ` +
-        `Use múltiples instancias de FundOrchestrator para múltiples fondos.`
-      );
+      throw new Error('FundOrchestrator debe recibir exactamente 1 fondo.');
     }
 
     this.idEjecucion = idEjecucion;
     this.idProceso = idProceso;
     this.fechaReporte = fechaReporte;
-    this.fondos = fondos; // Array de {ID_Fund: INT, Portfolio_Geneva: string, ...}
+    this.fondos = fondos;
     this.pool = pool;
-    this.tracker = tracker;
-    this.logger = logger;
-    this.trace = trace;
 
-    this.config = null; // pipeline.config.yaml
+    this.config = null;
     this.serviceInstances = new Map();
-    this.executionPlan = null; // Array of phases [{services, type, name}]
-    this.extractionTagged = false; // Flag para ejecutar tagging solo una vez
-
-    // Conexión SQL dedicada para este fondo (mantiene ##tablas_temporales vivas)
+    this.executionPlan = null;
     this.dedicatedConnection = null;
   }
 
   /**
    * Inicializar el orquestador
-   * - Cargar pipeline.config.yaml
-   * - Resolver dependencias entre servicios
-   * - Instanciar servicios (IPAService, CAPMService, etc.)
    */
   async initialize() {
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Inicializando...`);
-
-    // 1. Crear conexión SQL dedicada para este fondo
-    // CRÍTICO: Esta conexión se mantiene abierta durante TODO el pipeline
-    // para que las tablas ##temporales_globales persistan
-    try {
-      this.dedicatedConnection = await this.pool.connect();
-      console.log(`[FundOrchestrator ${this.idEjecucion}] ✓ Conexión SQL dedicada creada`);
-    } catch (error) {
-      console.error(`[FundOrchestrator ${this.idEjecucion}] Error creando conexión dedicada:`, error);
-      throw error;
-    }
+    // 1. Crear conexión dedicada para temp tables
+    this.dedicatedConnection = await this.pool.connect();
 
     // 2. Cargar pipeline.config.yaml
     const configPath = path.join(__dirname, '../../config/pipeline.config.yaml');
     const configFile = fs.readFileSync(configPath, 'utf8');
     this.config = yaml.load(configFile);
 
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Config cargado: ${this.config.services.length} servicios`);
-
-    // 3. Resolver dependencias usando DependencyResolver
+    // 3. Resolver dependencias
     const resolver = new DependencyResolver(this.config.services);
-    const executionOrder = resolver.getExecutionOrder(); // Array de IDs en orden topológico
+    const executionOrder = resolver.getExecutionOrder();
 
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Orden de ejecución: ${executionOrder.join(' -> ')}`);
-
-    // 4. Agrupar servicios por tipo de ejecución (batch, parallel, sequential)
+    // 4. Construir plan de ejecución
     this.executionPlan = this._buildExecutionPlan(executionOrder);
 
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Plan de ejecución: ${this.executionPlan.length} fases`);
-
-    // 5. Instanciar servicios (IPAService, CAPMService, etc.)
+    // 5. Instanciar servicios
     this._instantiateServices();
-
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Inicializado con ${this.fondos.length} fondos`);
   }
 
   /**
    * Construir plan de ejecución agrupando servicios por tipo
-   * - batch: servicios que se ejecutan 1 vez por fecha
-   * - parallel: servicios que se ejecutan por cada fondo en paralelo
-   * - sequential: servicios que se ejecutan 1 vez por fecha en orden
-   *
-   * @param {Array<String>} executionOrder - IDs de servicios en orden topológico
-   * @returns {Array<Object>} - Plan de ejecución [{type, services, name}]
    * @private
    */
   _buildExecutionPlan(executionOrder) {
     const phases = [];
     const serviceMap = new Map();
 
-    // Crear mapa de ID -> configuración
     this.config.services.forEach(svc => {
       serviceMap.set(svc.id, svc);
     });
 
-    // Agrupar servicios consecutivos del mismo tipo
     let currentPhase = null;
 
     executionOrder.forEach(serviceId => {
       const serviceConfig = serviceMap.get(serviceId);
-      if (!serviceConfig) {
-        console.warn(`[FundOrchestrator] Servicio ${serviceId} no encontrado en config`);
-        return;
-      }
+      if (!serviceConfig) return;
 
-      // Leer 'type' del config (usado en pipeline.config.yaml)
       const execType = serviceConfig.type || serviceConfig.executionType || 'parallel';
 
-      // Si cambia el tipo de ejecución, crear nueva fase
       if (!currentPhase || currentPhase.type !== execType) {
         currentPhase = {
           type: execType,
@@ -183,7 +95,6 @@ class FundOrchestrator {
         phases.push(currentPhase);
       }
 
-      // Agregar servicio a la fase actual
       currentPhase.services.push(serviceId);
     });
 
@@ -192,14 +103,9 @@ class FundOrchestrator {
 
   /**
    * Instanciar servicios del pipeline
-   * - Importa clases de servicios (IPAService, CAPMService, etc.)
-   * - Crea instancias con configuración específica
-   * - Almacena en serviceInstances Map
-   *
    * @private
    */
   _instantiateServices() {
-    // Importar servicios dinámicamente
     const ExtractionService = require('../pipeline/ExtractionService');
     const ValidationService = require('../pipeline/ValidationService');
     const IPAService = require('../pipeline/IPAService');
@@ -208,8 +114,6 @@ class FundOrchestrator {
     const PNLService = require('../pipeline/PNLService');
     const UBSService = require('../pipeline/UBSService');
 
-    // Mapear service IDs del config a clases Node.js
-    // Los IDs del config son como "PROCESS_IPA", pero las clases son IPAService
     const serviceClasses = {
       'EXTRACCION': ExtractionService,
       'VALIDACION': ValidationService,
@@ -218,69 +122,42 @@ class FundOrchestrator {
       'PROCESS_DERIVADOS': DerivadosService,
       'PROCESS_PNL': PNLService,
       'PROCESS_UBS': UBSService,
-      // CONSOLIDAR_CAPM, CONCATENAR, GRAPH_SYNC usan SPs directamente (sin clase Node.js aún)
     };
 
-    // Instanciar cada servicio con su config
-    // IMPORTANTE: Pasar dedicatedConnection en lugar de pool para mantener ##temp tables
+    // Instanciar servicios con nuevo constructor simplificado (serviceConfig, pool)
     this.config.services.forEach(svcConfig => {
       const ServiceClass = serviceClasses[svcConfig.id];
       if (ServiceClass) {
         this.serviceInstances.set(
           svcConfig.id,
-          new ServiceClass(svcConfig, this.dedicatedConnection, this.tracker, this.logger, this.trace)
+          new ServiceClass(svcConfig, this.dedicatedConnection)
         );
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio instanciado: ${svcConfig.id}`);
-      } else {
-        // Para servicios sin clase específica, usar un placeholder
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio ${svcConfig.id} sin implementación Node.js (usa SPs directamente)`);
       }
     });
   }
 
   /**
-   * Ejecutar SOLO las fases BATCH una vez (llamado externamente)
-   * - Usado para ejecutar extracción batch una sola vez para todos los fondos
-   * - Llamado desde routes antes de ejecutar orquestadores en paralelo
-   *
-   * @returns {Promise<void>}
+   * Ejecutar fases BATCH una vez
    */
   async _executeBatchPhasesOnce() {
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecutando fases BATCH...`);
-
     for (const phase of this.executionPlan) {
       if (phase.type === 'batch') {
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Fase batch: ${phase.name}`);
         await this._executeBatchPhase(phase);
       }
     }
-
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Fases BATCH completadas`);
   }
 
   /**
-   * Ejecutar el pipeline completo
-   * - Itera por cada fase del execution plan
-   * - Ejecuta servicios según tipo (batch, parallel, sequential)
-   * - Maneja errores según políticas configuradas
-   *
-   * NOTA: Las fases BATCH se ejecutan externamente una sola vez (ver routes),
-   * por lo que este método las OMITE y solo ejecuta parallel/sequential.
-   *
-   * @returns {Promise<Object>} - { success, idEjecucion }
+   * Ejecutar el pipeline completo (parallel/sequential)
    */
   async execute() {
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Iniciando ejecución del pipeline (parallel/sequential only)...`);
+    const fund = this.fondos[0];
 
     try {
-      for (const phase of this.executionPlan) {
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Fase: ${phase.name}, Tipo: ${phase.type}`);
+      pipelineEvents.emitEjecucionInicio(this.idEjecucion, fund.ID_Fund, fund.FundShortName);
 
-        // SKIP batch phases (ejecutadas externalmente)
-        if (phase.type === 'batch') {
-          console.log(`[FundOrchestrator ${this.idEjecucion}] Omitiendo fase batch (ejecutada externamente)`);
-          continue;
-        }
+      for (const phase of this.executionPlan) {
+        if (phase.type === 'batch') continue; // Ya ejecutado
 
         if (phase.type === 'parallel') {
           await this._executeParallelPhase(phase);
@@ -289,143 +166,64 @@ class FundOrchestrator {
         }
       }
 
-      // Actualizar stats finales
-      await this._updateExecutionStats('COMPLETADO');
-      console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecución completada exitosamente`);
-
-      // TRACE: Flush buffered trace records
-      if (this.trace) {
-        await this.trace.flush();
-        console.log(`[FundOrchestrator ${this.idEjecucion}] Trace records flushed (buffer: ${this.trace.getBufferSize()})`);
-      }
-
-      // NO cerrar conexión aquí - se cerrará externamente después de actualizar stats globales
-      // Esto evita errores de "Connection is closed" al actualizar estadísticas del proceso
-
+      pipelineEvents.emitEjecucionFin(this.idEjecucion, fund.ID_Fund, 'OK', 0);
       return { success: true, idEjecucion: this.idEjecucion };
 
     } catch (error) {
-      console.error(`[FundOrchestrator ${this.idEjecucion}] Error en ejecución:`, error);
-
-      // Actualizar stats finales con error
-      try {
-        await this._updateExecutionStats('ERROR');
-      } catch (statsError) {
-        console.error(`[FundOrchestrator ${this.idEjecucion}] Error actualizando stats:`, statsError);
-      }
-
-      // TRACE: Flush buffered trace records even on error
-      if (this.trace) {
-        try {
-          await this.trace.flush();
-          console.log(`[FundOrchestrator ${this.idEjecucion}] Trace records flushed after error (buffer: ${this.trace.getBufferSize()})`);
-        } catch (traceError) {
-          console.warn(`[FundOrchestrator ${this.idEjecucion}] Error flushing trace:`, traceError.message);
-        }
-      }
-
-      // NO cerrar conexión aquí - se cerrará externamente después de actualizar stats globales
-      // Esto evita errores de "Connection is closed" al actualizar estadísticas del proceso
-
+      pipelineEvents.emitEjecucionFin(this.idEjecucion, fund.ID_Fund, 'ERROR', 0);
       throw error;
     }
   }
 
   /**
-   * Cerrar conexión dedicada y limpiar recursos
-   * DEBE llamarse externamente después de que todas las operaciones del proceso hayan completado
-   * (incluyendo actualización de estadísticas globales)
+   * Cerrar conexión dedicada
    */
   async close() {
     if (this.dedicatedConnection) {
       try {
         await this.dedicatedConnection.close();
-        console.log(`[FundOrchestrator ${this.idEjecucion}] ✓ Conexión SQL dedicada cerrada (##temp tables eliminadas)`);
-      } catch (closeError) {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Warning cerrando conexión dedicada:`, closeError.message);
-      }
+      } catch (_e) {}
       this.dedicatedConnection = null;
     }
   }
 
   /**
    * Ejecutar fase BATCH
-   * - Se ejecuta 1 vez por fecha (no por fondo)
-   * - Ejemplo: Extracción de datos (Extract_IPA, Extract_CAPM, etc.)
-   *
-   * NOTA: Esta fase debe ejecutarse solo UNA VEZ globalmente, no una vez por orquestador.
-   * El tagging de datos (Fase 2) se ejecuta externamente después de la extracción batch.
-   *
-   * @param {Object} phase - Fase con servicios batch
    * @private
    */
   async _executeBatchPhase(phase) {
     for (const serviceId of phase.services) {
       const service = this.serviceInstances.get(serviceId);
-      if (!service) {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio batch no encontrado: ${serviceId}`);
-        continue;
-      }
+      if (!service) continue;
 
       const context = {
         idEjecucion: this.idEjecucion,
         idProceso: this.idProceso,
         fechaReporte: this.fechaReporte,
-        fund: null // batch no tiene fondo específico
+        fund: null
       };
 
-      console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecutando batch: ${service.name}`);
       await service.execute(context);
     }
   }
 
   /**
-   * Etiquetar datos extraídos con ID_Ejecucion (Fase 2)
-   * - Ejecuta extract.Tag_Extraction_Data SP
-   * - Asigna ID_Ejecucion a cada fila basándose en Portfolio
-   * - Permite aislamiento de datos por fondo en procesamiento paralelo
-   *
-   * @private
+   * Etiquetar datos extraídos con ID_Ejecucion
    */
   async _tagExtractionData() {
-    try {
-      console.log(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Etiquetando datos extraídos con ID_Ejecucion...`);
-
-      const result = await this.pool.request()
-        .input('ID_Proceso', sql.BigInt, this.idProceso)
-        .input('FechaReporte', sql.NVarChar(10), this.fechaReporte)
-        .execute('extract.Tag_Extraction_Data');
-
-      const returnValue = result.returnValue;
-
-      if (returnValue === 0) {
-        console.log(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] ✓ Datos etiquetados exitosamente`);
-      } else {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Tagging SP retornó: ${returnValue}`);
-      }
-    } catch (error) {
-      console.error(`[FundOrchestrator ${this.idEjecucion}] [FASE 2] Error etiquetando datos:`, error);
-      throw new Error(`Error en Fase 2 (Tagging): ${error.message}`);
-    }
+    await this.pool.request()
+      .input('ID_Proceso', sql.BigInt, this.idProceso)
+      .input('FechaReporte', sql.NVarChar(10), this.fechaReporte)
+      .execute('extract.Tag_Extraction_Data');
   }
 
   /**
    * Ejecutar fase PARALLEL
-   * - Se ejecuta por cada fondo en paralelo
-   * - Concurrencia adaptativa: Max 3 fondos en paralelo
-   * - RCSI habilitado: Elimina bloqueos de lectura usando versionado de filas
-   *
-   * @param {Object} phase - Fase con servicios parallel
    * @private
    */
   async _executeParallelPhase(phase) {
-    // Concurrencia reducida para evitar sobrecarga
-    // RCSI (Read Committed Snapshot Isolation) habilitado en BD elimina bloqueos de lectura
-    // Pool configurado con min=3 connections para evitar cross-contamination
     const concurrencyLimit = Math.min(this.fondos.length, 50);
     const limit = pLimit(concurrencyLimit);
-
-    console.log(`[FundOrchestrator ${this.idEjecucion}] Concurrencia: ${concurrencyLimit} fondos en paralelo (RCSI habilitado)`);
 
     const promises = this.fondos.map(fund =>
       limit(() => this._executeFundServices(fund, phase.services))
@@ -435,17 +233,7 @@ class FundOrchestrator {
   }
 
   /**
-   * Verificar si fondo debe ser excluido por problemas detectados
-   *
-   * Consulta sandbox.Fondos_Problema para determinar si el fondo tiene problemas
-   * críticos que impiden su procesamiento (datos faltantes, validaciones fallidas).
-   *
-   * IMPORTANTE: Fondos excluidos se marcan como OMITIDO y NO se procesan.
-   * Esto previene desperdiciar recursos en fondos que fallarán de todas formas.
-   *
-   * @param {Object} fund - Fondo a evaluar
-   * @param {String} fechaReporte - Fecha a procesar
-   * @returns {Promise<Boolean>} - true si debe ejecutarse, false si debe omitirse
+   * Verificar si fondo debe ser excluido
    * @private
    */
   async _shouldExecuteFund(fund, fechaReporte) {
@@ -460,46 +248,18 @@ class FundOrchestrator {
         `);
 
       if (result.recordset.length > 0) {
-        // Fondo tiene problemas - OMITIR
-        const problemas = result.recordset.map(r => `${r.Proceso}: ${r.Tipo_Problema}`).join('; ');
-
-        await this.logger.log(
-          this.idEjecucion,
-          fund.ID_Fund,
-          'WARNING',
-          'FundOrchestrator',
-          null,
-          `⚠️ Fondo OMITIDO por problemas detectados en validación: ${problemas}`
-        );
-
-        await this.tracker.updateFundState(
-          this.idEjecucion,
-          fund.ID_Fund,
-          'Estado_Final',
-          'OMITIDO'
-        );
-
-        return false; // NO ejecutar
+        pipelineEvents.emitServicioOmitido(this.idEjecucion, fund.ID_Fund, 'PIPELINE', 'Fondo en Fondos_Problema');
+        return false;
       }
 
-      return true; // OK para ejecutar
-    } catch (error) {
-      // En caso de error verificando, permitir ejecución (fail-safe)
-      console.warn(
-        `[FundOrchestrator ${this.idEjecucion}] Error verificando exclusión para fondo ${fund.ID_Fund}: ${error.message}`
-      );
       return true;
+    } catch (_error) {
+      return true; // Fail-safe
     }
   }
 
   /**
-   * Verificar si fondo está en stand-by y si servicio debe bloquearse
-   * - Consulta logs.Ejecucion_Fondos para estado stand-by
-   * - Determina qué servicios bloquear según PuntoBloqueoActual
-   *
-   * @param {Object} fund - Fondo a verificar
-   * @param {String} serviceId - ID del servicio a ejecutar
-   * @returns {Object} - { isPaused: Boolean, puntoBloqueo: String, motivo: String }
+   * Verificar stand-by
    * @private
    */
   async _checkFundStandByStatus(fund, serviceId) {
@@ -508,9 +268,7 @@ class FundOrchestrator {
         .input('ID_Ejecucion', sql.BigInt, this.idEjecucion)
         .input('ID_Fund', sql.Int, fund.ID_Fund)
         .query(`
-          SELECT EstadoStandBy, PuntoBloqueoActual,
-                 TieneSuciedades, TieneProblemasHomologacion,
-                 TieneDescuadres, TieneProblemasCAPM
+          SELECT EstadoStandBy, PuntoBloqueoActual
           FROM logs.Ejecucion_Fondos
           WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund
         `);
@@ -520,101 +278,51 @@ class FundOrchestrator {
       }
 
       const estado = result.recordset[0];
-
-      // Mapear puntos de bloqueo a servicios bloqueados
       const puntosBloqueo = {
         'ANTES_CAPM': ['PROCESS_CAPM', 'PROCESS_PNL', 'PROCESS_UBS'],
         'MID_IPA': ['PROCESS_CAPM', 'PROCESS_PNL', 'PROCESS_UBS', 'PROCESS_DERIVADOS'],
         'ANTES_PNL': ['PROCESS_PNL'],
         'MID_CAPM': ['PROCESS_PNL'],
-        'MID_PNL': [],
-        'MID_DERIVADOS': [],
-        'POST_DERIVADOS': [], // Warning, no bloquea servicios
-        'POST_PNL': [] // Warning, no bloquea servicios
       };
 
       const serviciosBloqueados = puntosBloqueo[estado.PuntoBloqueoActual] || [];
 
       if (serviciosBloqueados.includes(serviceId)) {
-        const motivos = [];
-        if (estado.TieneSuciedades) motivos.push('Suciedades');
-        if (estado.TieneProblemasHomologacion) motivos.push('Homologación');
-        if (estado.TieneDescuadres) motivos.push('Descuadres');
-        if (estado.TieneProblemasCAPM) motivos.push('CAPM');
-
-        return {
-          isPaused: true,
-          puntoBloqueo: estado.PuntoBloqueoActual,
-          motivo: motivos.join(', ')
-        };
+        return { isPaused: true, puntoBloqueo: estado.PuntoBloqueoActual };
       }
 
       return { isPaused: false };
-    } catch (error) {
-      console.warn(
-        `[FundOrchestrator ${this.idEjecucion}] Error verificando stand-by para fondo ${fund.ID_Fund}: ${error.message}`
-      );
-      return { isPaused: false }; // Fail-safe: permitir ejecución si hay error
+    } catch (_error) {
+      return { isPaused: false };
     }
   }
 
   /**
-   * Ejecutar servicios para un fondo específico
-   * - Verifica exclusión automática (sandbox.Fondos_Problema)
-   * - Verifica stand-by (logs.FondosEnStandBy)
-   * - Verifica condicionales (Flag_UBS, Flag_Derivados)
-   * - Ejecuta servicios en orden
-   * - AL FINAL: Consolida ##temp tables → process.CUBO_Final
-   * - Maneja errores según política (STOP_ALL, STOP_FUND, CONTINUE)
-   *
-   * @param {Object} fund - Fondo a procesar
-   * @param {Array} serviceIds - IDs de servicios a ejecutar
+   * Ejecutar servicios para un fondo
    * @private
    */
   async _executeFundServices(fund, serviceIds) {
     let fundProcessedOK = true;
 
     try {
-      // NUEVO: Verificar si fondo debe ser excluido por problemas
       const shouldExecute = await this._shouldExecuteFund(fund, this.fechaReporte);
-      if (!shouldExecute) {
-        return; // Skip este fondo completamente
-      }
+      if (!shouldExecute) return;
 
       for (const serviceId of serviceIds) {
         const service = this.serviceInstances.get(serviceId);
-        if (!service) {
-          console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio no encontrado: ${serviceId} (Fondo ${fund.ID_Fund})`);
-          continue;
-        }
+        if (!service) continue;
 
-        // NUEVO: Verificar stand-by ANTES de ejecutar servicio
+        // Verificar stand-by
         const standByStatus = await this._checkFundStandByStatus(fund, serviceId);
         if (standByStatus.isPaused) {
-          await this.logger.log(
-            this.idEjecucion,
-            fund.ID_Fund,
-            'INFO',
-            'FundOrchestrator',
-            null,
-            `⏸️ Fondo en stand-by - Bloqueando ${serviceId}. Motivo: ${standByStatus.motivo}`
-          );
-
-          await this.tracker.updateFundState(
-            this.idEjecucion,
-            fund.ID_Fund,
-            `Estado_Process_${serviceId}`,
-            'BLOQUEADO_STANDBY'
-          );
-
+          pipelineEvents.emitServicioOmitido(this.idEjecucion, fund.ID_Fund, serviceId, 'Stand-by activo');
           fundProcessedOK = false;
-          break; // DETENER ejecución de servicios siguientes
+          break;
         }
 
-        // Verificar condicional (ej: Flag_UBS, Flag_Derivados)
+        // Verificar condicional
         if (service.config.conditional && !this._shouldExecute(fund, service.config.conditional)) {
-          console.log(`[FundOrchestrator ${this.idEjecucion}] Servicio omitido (condicional): ${service.name} (Fondo ${fund.ID_Fund})`);
-          continue; // Skip este servicio para este fondo
+          continue;
         }
 
         const context = {
@@ -626,9 +334,7 @@ class FundOrchestrator {
 
         try {
           const result = await service.execute(context);
-
           if (!result.success) {
-            // Manejar error según política
             await this._handleServiceError(service, fund, result.error);
             fundProcessedOK = false;
           }
@@ -638,34 +344,22 @@ class FundOrchestrator {
         }
       }
 
-      // =====================================================
-      // FASE FINAL: Consolidar ##temp tables → CUBO_Final
-      // =====================================================
-      // IMPORTANTE: Esto debe ejecutarse ANTES de cerrar la conexión
-      // porque las ##temp tables se eliminan al cerrar la conexión
+      // Consolidar a CUBO si OK
       if (fundProcessedOK) {
         await this._consolidateFundToCubo(fund);
       }
 
-    } finally {
-      // Actualizar stats después de procesar cada fondo (tiempo real)
-      await this._updateExecutionStats();
+    } catch (_error) {
+      // Error ya manejado
     }
   }
 
   /**
-   * Consolidar datos de ##temp tables → process.CUBO_Final
-   * - Lee de ##IPA_Final, ##CAPM_Work, ##PNL_Final, ##Derivados_Work, ##UBS_Work
-   * - Escribe a process.CUBO_Final con TipoRegistro apropiado
-   * - DEBE ejecutarse en la MISMA conexión que tiene las ##temp tables
-   *
-   * @param {Object} fund - Fondo a consolidar
+   * Consolidar fondo a CUBO_Final
    * @private
    */
   async _consolidateFundToCubo(fund) {
     try {
-      console.log(`[FundOrchestrator ${this.idEjecucion}] Consolidando fondo ${fund.ID_Fund} → CUBO_Final...`);
-
       const request = this.dedicatedConnection.request();
       request.input('ID_Ejecucion', sql.BigInt, this.idEjecucion);
       request.input('ID_Fund', sql.Int, fund.ID_Fund);
@@ -673,218 +367,56 @@ class FundOrchestrator {
       request.input('FechaReporte', sql.NVarChar(10), this.fechaReporte);
       request.input('Debug', sql.Bit, 0);
 
-      const result = await request.execute('staging.Consolidar_Fondo_A_Cubo_v3');
-      const returnValue = result.returnValue;
-
-      if (returnValue === 0) {
-        // Obtener estadísticas del resultado
-        const stats = result.recordset && result.recordset[0] ? result.recordset[0] : {};
-        console.log(
-          `[FundOrchestrator ${this.idEjecucion}] ✓ Fondo ${fund.ID_Fund} consolidado: ` +
-          `${stats.TotalInserted || 0} registros (IPA:${stats.Count_IPA || 0}, CAPM:${stats.Count_CAPM || 0}, ` +
-          `PNL:${stats.Count_PNL || 0}, DERIV:${stats.Count_Derivados || 0}, UBS:${stats.Count_MLCCII || 0})`
-        );
-      } else if (returnValue === 2) {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Consolidación fondo ${fund.ID_Fund}: Retry sugerido (deadlock)`);
-      } else {
-        console.error(`[FundOrchestrator ${this.idEjecucion}] Error consolidando fondo ${fund.ID_Fund}: ReturnCode=${returnValue}`);
-      }
-
+      await request.execute('staging.Consolidar_Fondo_A_Cubo_v3');
     } catch (error) {
-      console.error(`[FundOrchestrator ${this.idEjecucion}] Error en consolidación fondo ${fund.ID_Fund}:`, error.message);
-
-      // Registrar error pero NO detener el pipeline
-      await this.logger.log(
-        this.idEjecucion,
-        fund.ID_Fund,
-        'ERROR',
-        'FundOrchestrator',
-        'CONSOLIDAR_CUBO',
-        `Error consolidando a CUBO_Final: ${error.message}`
-      );
+      pipelineEvents.emitServicioError(this.idEjecucion, fund.ID_Fund, 'CONSOLIDAR_CUBO', error);
     }
   }
 
   /**
    * Ejecutar fase SEQUENTIAL
-   * - Se ejecuta en orden secuencial (no paralelo)
-   * - Se ejecuta 1 vez por fecha (consolidación)
-   * - Ejemplo: Concatenar, Graph_Sync
-   *
-   * @param {Object} phase - Fase con servicios sequential
    * @private
    */
   async _executeSequentialPhase(phase) {
     for (const serviceId of phase.services) {
       const service = this.serviceInstances.get(serviceId);
-      if (!service) {
-        console.warn(`[FundOrchestrator ${this.idEjecucion}] Servicio sequential no encontrado: ${serviceId}`);
-        continue;
-      }
+      if (!service) continue;
 
       const context = {
         idEjecucion: this.idEjecucion,
         fechaReporte: this.fechaReporte,
-        fund: null // sequential no tiene fondo específico
+        fund: null
       };
 
-      console.log(`[FundOrchestrator ${this.idEjecucion}] Ejecutando sequential: ${service.name}`);
       await service.execute(context);
     }
   }
 
   /**
-   * Evaluar si un servicio debe ejecutarse para un fondo
-   * - Evalúa condicionales (Flag_UBS, Flag_Derivados, etc.)
-   *
-   * @param {Object} fund - Fondo a evaluar
-   * @param {String} conditional - Condicional a evaluar
-   * @returns {Boolean} - true si debe ejecutarse
+   * Evaluar condicional
    * @private
    */
   _shouldExecute(fund, conditional) {
     if (conditional === 'Flag_UBS') return fund.Flag_UBS === 1;
     if (conditional === 'Flag_Derivados') return fund.Flag_Derivados === 1;
     if (conditional === 'Requiere_Derivados') return fund.Requiere_Derivados === 1;
-
-    // Default: ejecutar
     return true;
   }
 
   /**
-   * Manejar error de servicio según política configurada
-   * - STOP_ALL: Detener toda la ejecución (lanzar error)
-   * - STOP_FUND: Marcar fondo como error, continuar con otros fondos
-   * - CONTINUE: Log error y continuar
-   *
-   * @param {Object} service - Servicio que falló
-   * @param {Object} fund - Fondo que falló
-   * @param {Error} error - Error ocurrido
+   * Manejar error de servicio
    * @private
    */
   async _handleServiceError(service, fund, error) {
-    // Mapear onError del config a política interna
-    // onError puede ser: STOP_ALL, STOP_FUND, CONTINUE, LOG_WARNING
     const onError = service.config.onError || 'STOP_ALL';
     const policy = onError === 'LOG_WARNING' ? 'CONTINUE' : onError;
 
-    console.error(
-      `[FundOrchestrator ${this.idEjecucion}] Error en servicio ${service.name} (Fondo ${fund.ID_Fund}):`,
-      error.message
-    );
-
-    // Registrar error en logs
-    await this.logger.error(
-      this.idEjecucion,
-      fund.ID_Fund,
-      service.name,
-      error.message || error.toString(),
-      error
-    );
+    pipelineEvents.emitServicioError(this.idEjecucion, fund.ID_Fund, service.id, error);
 
     if (policy === 'STOP_ALL') {
-      // Detener toda la ejecución
       throw error;
-    } else if (policy === 'STOP_FUND') {
-      // Marcar fondo como error, continuar con otros fondos
-      await this.tracker.markFundFailed(
-        this.idEjecucion,
-        fund.ID_Fund,
-        service.name,
-        error.message
-      );
-      // No lanzar error - permite continuar con otros fondos
-      return;
-    } else if (policy === 'CONTINUE') {
-      // Log y continuar (ya se logueó arriba con logger.error)
-      // CONTINUE policy: simplemente continuar sin marcar fondo como ERROR
-      // El error ya fue logueado en logs.Ejecucion_Logs para auditoría
-      console.log(
-        `[FundOrchestrator ${this.idEjecucion}] Política CONTINUE: ` +
-        `continuando ejecución para fondo ${fund.ID_Fund} después de error en ${service.name}`
-      );
-      // No lanzar error - continuar con siguiente servicio
-      return;
     }
-  }
-
-  /**
-   * Actualizar estadísticas de ejecución en tiempo real
-   * - Consulta logs.Ejecucion_Fondos para obtener contadores actuales
-   * - Actualiza logs.Ejecuciones con FondosExitosos, FondosFallidos, etc.
-   * - Se llama después de procesar cada fondo y al finalizar
-   *
-   * @param {String} estadoFinal - Estado final de la ejecución (opcional)
-   * @private
-   */
-  async _updateExecutionStats(estadoFinal = null) {
-    try {
-      // Obtener estados actuales de todos los fondos
-      const fondosStates = await this.tracker.getFundStates(this.idEjecucion);
-
-      // Calcular contadores
-      const stats = {
-        fondosOK: fondosStates.filter(f => f.Estado_Final === 'COMPLETADO').length,
-        fondosError: fondosStates.filter(f => f.Estado_Final === 'ERROR').length,
-        fondosWarning: fondosStates.filter(f => f.Estado_Final === 'WARNING').length,
-        fondosOmitidos: fondosStates.filter(f => f.Estado_Final === 'OMITIDO').length,
-      };
-
-      // Determinar estado de la ejecución
-      let estado = estadoFinal || 'EN_PROGRESO';
-
-      // Si no se especificó estado final, calcularlo
-      if (!estadoFinal) {
-        const totalProcesados = stats.fondosOK + stats.fondosError + stats.fondosWarning + stats.fondosOmitidos;
-        const totalFondos = this.fondos.length;
-
-        // Si todos procesados, determinar estado final
-        if (totalProcesados === totalFondos) {
-          if (stats.fondosError > 0) {
-            estado = stats.fondosOK > 0 ? 'PARCIAL' : 'ERROR';
-          } else if (stats.fondosWarning > 0) {
-            estado = 'COMPLETADO'; // Con warnings pero completado
-          } else {
-            estado = 'COMPLETADO';
-          }
-        }
-      }
-
-      // Actualizar tabla logs.Ejecuciones
-      await this.tracker.actualizarEstadoEjecucion(this.idEjecucion, estado, stats);
-
-      // Emitir actualización de ejecución por WebSocket
-      try {
-        const wsManager = require('../websocket/WebSocketManager');
-
-        wsManager.emitToExecution(this.idEjecucion, {
-          type: 'EXECUTION_UPDATE',
-          data: {
-            ID_Ejecucion: this.idEjecucion,
-            Estado: estado,
-            FondosExitosos: stats.fondosOK,
-            FondosFallidos: stats.fondosError,
-            FondosWarning: stats.fondosWarning,
-            FondosOmitidos: stats.fondosOmitidos,
-            timestamp: new Date().toISOString(),
-          },
-        });
-      } catch (error) {
-        console.warn('[FundOrchestrator] Error emitiendo WebSocket:', error.message);
-      }
-
-      console.log(
-        `[FundOrchestrator ${this.idEjecucion}] Stats actualizados - ` +
-        `OK: ${stats.fondosOK}, Error: ${stats.fondosError}, Warning: ${stats.fondosWarning}, Omitidos: ${stats.fondosOmitidos}`
-      );
-
-    } catch (error) {
-      console.error(
-        `[FundOrchestrator ${this.idEjecucion}] Error actualizando stats:`,
-        error
-      );
-      // No lanzar error - esto es un update auxiliar
-    }
+    // STOP_FUND y CONTINUE: no lanzar error
   }
 }
 

@@ -1,13 +1,20 @@
 /**
  * Tracking Services - Exportaciones Centralizadas
  *
- * Punto de entrada único para los servicios de tracking del pipeline.
+ * ARQUITECTURA EVENT-DRIVEN (v3.0):
+ * - TrackingService: Servicio unificado que escucha eventos del pipeline
+ * - PipelineEventEmitter: Singleton para emitir eventos
+ *
+ * SERVICIOS OBSOLETOS (eliminados):
+ * - ExecutionTracker → Reemplazado por TrackingService
+ * - LoggingService → Reemplazado por TrackingService
+ * - TraceService → Eliminado (no se usaba)
  */
 
-const ExecutionTracker = require('./ExecutionTracker');
-const LoggingService = require('./LoggingService');
+const { TrackingService, getInstance, resetInstance } = require('./TrackingService');
 
 module.exports = {
-  ExecutionTracker,
-  LoggingService,
+  TrackingService,
+  getInstance,
+  resetInstance,
 };

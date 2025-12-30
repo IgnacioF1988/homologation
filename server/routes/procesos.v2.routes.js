@@ -53,7 +53,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool, sql } = require('../config/database');
 const { FundOrchestrator } = require('../services/orchestration');
-const { ExecutionTracker, LoggingService } = require('../services/tracking');
+const { TrackingService, getInstance: getTrackingService } = require('../services/tracking/TrackingService');
 
 // Usa el pool centralizado de Inteligencia_Producto_Dev
 const getInteligenciaPool = getPool;
@@ -213,11 +213,8 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
       throw new Error('No hay ejecuciones hijas para procesar');
     }
 
-    // 2. Instanciar servicios de tracking compartidos
-    const tracker = new ExecutionTracker(pool);
-    const logger = new LoggingService(pool);
-    const TraceService = require('../services/tracking/TraceService');
-    const trace = new TraceService(pool, 100); // Buffer size = 100
+    // 2. Inicializar TrackingService (event-driven, escucha eventos automáticamente)
+    const trackingService = getTrackingService(pool);
 
     // 3. Crear un orquestador por cada ejecución (un fondo por orquestador)
     const orchestrators = ejecuciones.map(ejecucion => {
@@ -233,15 +230,13 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
         Requiere_Derivados: ejecucion.Requiere_Derivados
       };
 
+      // Constructor simplificado: sin tracker/logger/trace (event-driven)
       return new FundOrchestrator(
-        ejecucion.ID_Ejecucion,  // ID único por fondo
-        idProceso,                // ID del proceso padre
+        ejecucion.ID_Ejecucion,
+        idProceso,
         fechaReporte,
-        [fondoData],              // Array de UN SOLO fondo
-        pool,
-        tracker,
-        logger,
-        trace                     // TraceService compartido para trazabilidad
+        [fondoData],
+        pool
       );
     });
 
@@ -306,7 +301,20 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
 
     // 7. Actualizar estadísticas del proceso padre
     try {
-      await tracker.updateProcesoStats(idProceso);
+      await pool.request()
+        .input('ID_Proceso', sql.BigInt, idProceso)
+        .query(`
+          UPDATE logs.Procesos SET
+            FondosOK = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'COMPLETADO'),
+            FondosError = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'ERROR'),
+            Estado = CASE
+              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'ERROR') = 0 THEN 'COMPLETADO'
+              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'COMPLETADO') = 0 THEN 'ERROR'
+              ELSE 'PARCIAL'
+            END,
+            FechaFin = GETDATE()
+          WHERE ID_Proceso = @ID_Proceso
+        `);
     } catch (statsError) {
       console.error(`[Proceso ${idProceso}] Error actualizando estadísticas (no crítico):`, statsError.message);
     }

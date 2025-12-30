@@ -1,38 +1,11 @@
 /**
  * PNLService - Servicio de procesamiento PNL (Profit & Loss)
  *
- * Ejecuta el pipeline de 5 pasos secuenciales para procesar Profit & Loss (Ganancia/Pérdida).
- * El paso final consolida IPA + PNL en una tabla unificada.
+ * Ejecuta pipeline de 5 SPs para procesar Profit & Loss.
+ * Consolida IPA + PNL en tabla unificada.
+ * Hereda de BasePipelineService.
  *
- * RECIBE:
- * - serviceConfig: Configuración desde pipeline.config.yaml (5 SPs secuenciales)
- * - pool: Pool de conexiones SQL Server (compartido)
- * - tracker: ExecutionTracker para actualizar estados
- * - logger: LoggingService para registrar eventos
- * - trace: TraceService (opcional)
- * - context: { idEjecucion, fechaReporte, fund } desde FundOrchestrator
- *
- * PROCESA (5 pasos secuenciales):
- * 1. PNL_01_Dimensiones_v2: Crea dimensiones de P&L
- * 2. PNL_02_Ajuste_v2: Aplica ajustes contables
- * 3. PNL_03_Agrupacion_v2: Agrupa registros por dimensión
- * 4. PNL_04_CrearRegistrosAjusteIPA_v2: Crea registros de ajuste entre IPA y PNL
- * 5. PNL_05_Consolidar_IPA_PNL_v2: Consolida IPA + PNL en tabla final
- *
- * ENVIA:
- * - Datos a: staging.PNL_IPA (tabla consolidada IPA + PNL)
- * - Estados a: ExecutionTracker → logs.Ejecucion_Fondos (Estado_PNL_01 hasta Estado_PNL_05)
- * - Logs a: LoggingService → logs.Ejecucion_Logs
- *
- * DEPENDENCIAS:
- * - Requiere: PROCESS_IPA completado (usa staging.IPA_Final)
- * - Requerido por: CONCATENAR (concatena PNL de todos los fondos)
- *
- * CONTEXTO PARALELO:
- * - Procesa 1 fondo a la vez de forma aislada
- * - Usa tablas temporales: #temp_PNL_WorkTable_[ID_Ejecucion]_[ID_Fund]
- * - Los 5 pasos se ejecutan secuencialmente en una transacción
- * - PNL_05 consolida staging.IPA_Final + staging.PNL en staging.PNL_IPA
+ * @module PNLService
  */
 
 const BasePipelineService = require('./BasePipelineService');
@@ -41,112 +14,38 @@ const sql = require('mssql');
 class PNLService extends BasePipelineService {
   /**
    * Constructor
-   * @param {Object} serviceConfig - Configuración del servicio desde pipeline.config.yaml
+   * @param {Object} serviceConfig - Configuración desde pipeline.config.yaml
    * @param {Object} pool - Connection pool de SQL Server
-   * @param {Object} tracker - ExecutionTracker para actualizar estados
-   * @param {Object} logger - LoggingService para registrar eventos
-   * @param {Object} trace - TraceService para trazabilidad (opcional)
    */
-  constructor(serviceConfig, pool, tracker, logger, trace = null) {
-    super(serviceConfig, pool, tracker, logger, trace);
+  constructor(serviceConfig, pool) {
+    super(serviceConfig, pool);
 
-    // Validar que la configuración tenga los 5 SPs del grupo PNL
     if (!this.config.spList || this.config.spList.length !== 5) {
       throw new Error('PNLService requiere exactamente 5 SPs en la configuración');
-    }
-
-    // Validar que los SPs estén en orden correcto
-    const expectedSPs = [
-      'staging.PNL_01_Dimensiones_v2',
-      'staging.PNL_02_Ajuste_v2',
-      'staging.PNL_03_Agrupacion_v2',
-      'staging.PNL_04_CrearRegistrosAjusteIPA_v2',
-      'staging.PNL_05_Consolidar_IPA_PNL_v2',
-    ];
-
-    const actualSPs = this.config.spList.map(sp => sp.name);
-    const missingOrWrong = expectedSPs.filter((sp, idx) => actualSPs[idx] !== sp);
-
-    if (missingOrWrong.length > 0) {
-      console.warn(
-        `[PNLService] Configuración de SPs no coincide con esperado. ` +
-        `Esperado: ${expectedSPs.join(', ')}. ` +
-        `Actual: ${actualSPs.join(', ')}`
-      );
     }
   }
 
   /**
-   * Ejecutar pipeline PNL para un fondo específico
-   *
-   * Este método sobrescribe el de BasePipelineService para agregar
-   * lógica específica de PNL (ej: validaciones especiales, cleanup)
-   *
-   * @param {Object} context - Contexto de ejecución
-   * @returns {Promise<Object>} - { success, duration, metrics, skipped }
+   * Ejecutar pipeline PNL
+   * Delega completamente a BasePipelineService
    */
   async execute(context) {
-    const { idEjecucion, fechaReporte, fund } = context;
-    const startTime = Date.now();
-
-    try {
-      // 1. Validaciones previas específicas de PNL
-      await this.validatePNLPrerequisites(context);
-
-      // 2. Log inicio del procesamiento PNL
-      await this.logInfo(
-        idEjecucion,
-        fund.ID_Fund,
-        `Iniciando procesamiento PNL - Fondo: ${fund.FundShortName} (${fund.Portfolio_Geneva})`
-      );
-
-      // 3. Ejecutar pipeline usando lógica base (ejecuta los 5 SPs en orden)
-      const result = await super.execute(context);
-
-      // 4. Log resumen final
-      const duration = Date.now() - startTime;
-      await this.logInfo(
-        idEjecucion,
-        fund.ID_Fund,
-        `PNL completado exitosamente en ${(duration / 1000).toFixed(2)}s - ` +
-        `Fondo: ${fund.FundShortName}`
-      );
-
-      return { ...result, duration };
-
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      await this.logError(
-        idEjecucion,
-        fund.ID_Fund,
-        `Error en procesamiento PNL: ${error.message}`
-      );
-
-      // Re-lanzar error para que BasePipelineService lo maneje
-      throw error;
-    }
+    await this.validatePNLPrerequisites(context);
+    return await super.execute(context);
   }
 
   /**
    * Validar pre-requisitos específicos de PNL
-   *
-   * @param {Object} context - Contexto de ejecución
-   * @returns {Promise<void>}
    * @private
    */
   async validatePNLPrerequisites(context) {
-    const { idEjecucion, fechaReporte, fund } = context;
+    const { idEjecucion, fund } = context;
 
-    // Validar que el fondo tenga Portfolio_Geneva definido
     if (!fund.Portfolio_Geneva) {
-      throw new Error(
-        `Fondo ${fund.ID_Fund} (${fund.FundShortName}) no tiene Portfolio_Geneva definido. ` +
-        `PNL requiere este campo.`
-      );
+      throw new Error(`Fondo ${fund.ID_Fund} (${fund.FundShortName}) no tiene Portfolio_Geneva definido.`);
     }
 
     // Validar que IPA haya completado exitosamente
-    // (PNL_05 consolidará IPA + PNL, por lo que necesita IPA procesado)
     const request = this.pool.request();
     const result = await request
       .input('ID_Ejecucion', sql.BigInt, idEjecucion)
@@ -158,124 +57,16 @@ class PNLService extends BasePipelineService {
       `);
 
     if (!result.recordset[0] || result.recordset[0].Estado_Process_IPA !== 'OK') {
-      throw new Error(
-        `PNL requiere que IPA haya completado exitosamente para el fondo ${fund.FundShortName}. ` +
-        `Estado IPA actual: ${result.recordset[0]?.Estado_Process_IPA || 'DESCONOCIDO'}`
-      );
-    }
-
-    await this.logDebug(
-      idEjecucion,
-      fund.ID_Fund,
-      `Validaciones PNL OK - IPA completado exitosamente`
-    );
-  }
-
-  /**
-   * Obtener métricas específicas del procesamiento PNL
-   *
-   * @param {Object} context - Contexto de ejecución
-   * @returns {Promise<Object>} - Métricas del procesamiento
-   */
-  async getPNLMetrics(context) {
-    const { idEjecucion, fund } = context;
-
-    try {
-      const tempTableName = `#temp_PNL_Final_${idEjecucion}_${fund.ID_Fund}`;
-
-      const request = this.pool.request();
-      const result = await request.query(`
-        IF OBJECT_ID('tempdb..${tempTableName}') IS NOT NULL
-        BEGIN
-          SELECT
-            COUNT(*) AS TotalRegistros,
-            COUNT(DISTINCT ID_Instrumento) AS TotalInstrumentos,
-            SUM(ISNULL(MVBook, 0)) AS TotalMVal,
-            SUM(CASE WHEN Tipo = 'PNL' THEN 1 ELSE 0 END) AS RegistrosPNL,
-            SUM(CASE WHEN Tipo = 'AJUSTE_IPA' THEN 1 ELSE 0 END) AS RegistrosAjusteIPA
-          FROM ${tempTableName};
-        END
-        ELSE
-        BEGIN
-          SELECT 0 AS TotalRegistros, 0 AS TotalInstrumentos, 0 AS TotalMVal,
-                 0 AS RegistrosPNL, 0 AS RegistrosAjusteIPA;
-        END
-      `);
-
-      return result.recordset[0];
-    } catch (error) {
-      await this.logWarning(
-        idEjecucion,
-        fund.ID_Fund,
-        `No se pudieron obtener métricas PNL: ${error.message}`
-      );
-
-      return {
-        TotalRegistros: 0,
-        TotalInstrumentos: 0,
-        TotalMVal: 0,
-        RegistrosPNL: 0,
-        RegistrosAjusteIPA: 0,
-      };
+      throw new Error(`PNL requiere que IPA haya completado exitosamente. Estado actual: ${result.recordset[0]?.Estado_Process_IPA || 'DESCONOCIDO'}`);
     }
   }
 
-  /**
-   * Cleanup de tablas temporales del fondo
-   *
-   * Llamar al finalizar el procesamiento (exitoso o con error)
-   * para liberar recursos de SQL Server
-   *
-   * @param {Object} context - Contexto de ejecución
-   * @returns {Promise<void>}
-   */
-  async cleanup(context) {
-    const { idEjecucion, fund } = context;
-
-    const tempTables = [
-      `#temp_PNL_WorkTable_${idEjecucion}_${fund.ID_Fund}`,
-      `#temp_PNL_Dimensiones_${idEjecucion}_${fund.ID_Fund}`,
-      `#temp_PNL_Ajuste_${idEjecucion}_${fund.ID_Fund}`,
-      `#temp_PNL_Agrupado_${idEjecucion}_${fund.ID_Fund}`,
-      `#temp_PNL_AjusteIPA_${idEjecucion}_${fund.ID_Fund}`,
-      `#temp_PNL_Final_${idEjecucion}_${fund.ID_Fund}`,
-    ];
-
-    for (const tableName of tempTables) {
-      try {
-        const request = this.pool.request();
-        await request.query(`DROP TABLE IF EXISTS ${tableName};`);
-      } catch (error) {
-        // Ignorar errores de cleanup (tabla no existe, etc.)
-        console.warn(
-          `[PNLService] Error limpiando ${tableName} para fondo ${fund.ID_Fund}: ${error.message}`
-        );
-      }
-    }
-
-    await this.logDebug(
-      idEjecucion,
-      fund.ID_Fund,
-      'Tablas temporales PNL limpiadas'
-    );
-  }
-
-  /**
-   * Obtener nombre descriptivo del servicio
-   *
-   * @returns {String}
-   */
   getServiceName() {
     return 'PNL Processing Service';
   }
 
-  /**
-   * Obtener versión del servicio
-   *
-   * @returns {String}
-   */
   getVersion() {
-    return '2.0.0';
+    return '3.0.0';
   }
 }
 

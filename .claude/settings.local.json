@@ -68,7 +68,8 @@
       "Bash(tee:*)",
       "Bash(where:*)",
       "Bash(xargs:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "mcp__filesystem__read_multiple_files"
     ],
     "deny": [],
     "ask": []
