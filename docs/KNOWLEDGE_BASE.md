@@ -1,8 +1,8 @@
 # DOCUMENTO BASE DE CONOCIMIENTO - Pipeline Homologacion Moneda
 
-**Fecha:** 2025-12-29
+**Fecha:** 2025-12-30
 **Proyecto:** Homologation Pipeline ETL
-**Version:** 3.0 - FASE 1 COMPLETADA
+**Version:** 4.0 - TRACKING EVENT-DRIVEN IMPLEMENTADO
 
 ---
 
@@ -32,9 +32,9 @@ C:\Users\ifuentes\homologation\
 │   │   │   ├── FundOrchestrator.js      # Orquestador por fondo
 │   │   │   └── DependencyResolver.js    # Orden topologico
 │   │   ├── tracking/
-│   │   │   ├── ExecutionTracker.js      # Estado en BD
-│   │   │   ├── LoggingService.js        # Logs bulk insert
-│   │   │   └── TraceService.js          # Trazabilidad granular
+│   │   │   └── TrackingService.js      # UNIFICADO: Event-driven
+│   │   ├── events/
+│   │   │   └── PipelineEventEmitter.js # Emisor de eventos del pipeline
 │   │   └── websocket/
 │   │       └── WebSocketManager.js      # Tiempo real al frontend
 ├── database/migrations/                 # Migraciones SQL
@@ -212,9 +212,7 @@ POST /api/procesos/v2/ejecutar
 
 | Servicio | Archivo | Destino BD | Proposito |
 |----------|---------|------------|----------|
-| **ExecutionTracker** | tracking/ExecutionTracker.js | logs.Ejecucion_Fondos | Estado actual por fondo |
-| **LoggingService** | tracking/LoggingService.js | logs.Ejecucion_Logs | Mensajes (bulk insert 100) |
-| **TraceService** | tracking/TraceService.js | logs.Trace_Records | Eventos tecnicos + duracion |
+| **TrackingService** | tracking/TrackingService.js | logs.Ejecuciones, logs.EventosDetallados, logs.StandBy, sandbox.* | Tracking unificado event-driven |
 
 ### 4.2 Arquitectura de Logging (MANTENER SEPARADOS)
 
@@ -223,15 +221,15 @@ POST /api/procesos/v2/ejecutar
 |                    ARQUITECTURA ACTUAL                            |
 +------------------------------------------------------------------+
 |                                                                  |
-|  ExecutionTracker -> logs.Ejecucion_Fondos                       |
+|  TrackingService -> logs.Ejecuciones, logs.EventosDetallados     |
 |      Proposito: Estados actuales para frontend (WebSocket)       |
 |                                                                  |
-|  LoggingService -> logs.Ejecucion_Logs                           |
-|      Proposito: Mensajes user-facing (INFO, ERROR, WARNING)      |
+|  (LEGACY) LoggingService -> logs.Ejecucion_Logs (OBSOLETO)       |
+|      Proposito: Reemplazado por logs.EventosDetallados           |
 |      Caracteristicas: Bulk insert (100 registros), auto-flush    |
 |                                                                  |
-|  TraceService -> logs.Trace_Records                              |
-|      Proposito: Metricas de performance (START, END, duracion)   |
+|  (LEGACY) TraceService -> logs.Trace_Records (OBSOLETO)          |
+|      Proposito: Reemplazado por TrackingService                  |
 |      Caracteristicas: Buffer 100, analisis de cuellos botella    |
 |                                                                  |
 +------------------------------------------------------------------+

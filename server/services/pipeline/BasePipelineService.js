@@ -24,6 +24,8 @@
 
 const sql = require('mssql');
 const pipelineEvents = require('../events/PipelineEventEmitter');
+const { isStandByCode, getTipoProblema, RETURN_CODES } = require('../../constants/standby');
+const { isRetriable } = require('../../utils/ErrorNormalizer');
 
 /**
  * StandByRequiredError - Error especial para stand-by
@@ -38,6 +40,23 @@ class StandByRequiredError extends Error {
     this.standByCode = standByCode;
     this.spName = spName;
     this.pausable = true;
+  }
+}
+
+/**
+ * RetryExhaustedError - Error cuando se agotan los reintentos
+ *
+ * Código 4: Indica que un SP falló después de múltiples reintentos
+ * (deadlock, timeout, conexión). Permite distinguir de errores críticos (código 3).
+ */
+class RetryExhaustedError extends Error {
+  constructor(message, originalError, attempts, spName) {
+    super(message);
+    this.name = 'RetryExhaustedError';
+    this.code = 4;
+    this.originalError = originalError;
+    this.attempts = attempts;
+    this.spName = spName;
   }
 }
 
@@ -257,15 +276,8 @@ class BasePipelineService {
     const rowsProcessed = result.output.RowsProcessed || 0;
     const errorCount = result.output.ErrorCount || 0;
 
-    // Códigos stand-by (5-8)
-    if (returnValue >= 5 && returnValue <= 8) {
-      const standByTypes = {
-        5: 'SUCIEDADES',
-        6: 'HOMOLOGACION',
-        7: 'DESCUADRES_CAPM',
-        8: 'DESCUADRES_GENERAL'
-      };
-
+    // Códigos stand-by (5-12) - usar constantes centralizadas
+    if (isStandByCode(returnValue)) {
       // Capturar recordset con datos de homologación (si existe)
       // El SP retorna: TipoHomologacion, Item, Currency, Source, Detalle
       const homologacionData = result.recordset && result.recordset.length > 0
@@ -278,7 +290,7 @@ class BasePipelineService {
         returnValue,
         this.id,
         {
-          tipoProblema: standByTypes[returnValue],
+          tipoProblema: getTipoProblema(returnValue),
           cantidad: errorCount || homologacionData.length || 1,
           puntoBloqueo: spName,
           motivo: `Stand-by activado por ${spName}`,
@@ -318,6 +330,7 @@ class BasePipelineService {
   async executeWithRetry(fn, spConfig) {
     const maxRetries = 3;
     let lastError;
+    let wasRetriable = false;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -325,22 +338,39 @@ class BasePipelineService {
       } catch (error) {
         lastError = error;
 
-        // Verificar si es error retriable
-        const isDeadlock = error.number === 1205;
-        const isTimeout = error.code === 'ETIMEOUT';
-        const isConnectionError = error.code === 'ECONNRESET' || error.code === 'ESOCKET';
-        const shouldRetry = isDeadlock || isTimeout || isConnectionError;
+        // Verificar si es error retriable usando helper centralizado
+        const shouldRetry = isRetriable(error);
 
-        if (shouldRetry && attempt < maxRetries) {
-          const delay = 5000 * attempt; // 5s, 10s, 15s
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
+        if (shouldRetry) {
+          wasRetriable = true;
+          if (attempt < maxRetries) {
+            const delay = 5000 * attempt; // 5s, 10s, 15s
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          // Reintentos agotados para error retriable -> codigo 4
+          throw new RetryExhaustedError(
+            `${spConfig.name} fallo tras ${maxRetries} reintentos: ${error.message}`,
+            error,
+            maxRetries,
+            spConfig.name
+          );
         }
 
+        // Error no retriable -> propagar directamente
         throw error;
       }
     }
 
+    // Safety: si llegamos aqui con error retriable, lanzar RetryExhaustedError
+    if (wasRetriable) {
+      throw new RetryExhaustedError(
+        `${spConfig.name} fallo tras ${maxRetries} reintentos`,
+        lastError,
+        maxRetries,
+        spConfig.name
+      );
+    }
     throw lastError;
   }
 
@@ -387,7 +417,24 @@ class BasePipelineService {
       return;
     }
 
-    // Emitir evento de error
+    // Código 4: Retry exhausted - evento especial
+    if (error instanceof RetryExhaustedError) {
+      pipelineEvents.emitRetryExhausted(
+        idEjecucion,
+        fund.ID_Fund,
+        this.id,
+        error.spName,
+        error.attempts,
+        error.originalError
+      );
+      // También propagar como error si config lo indica
+      if (this.config.onError === 'STOP_FUND' || this.config.onError === 'STOP_ALL') {
+        throw error;
+      }
+      return;
+    }
+
+    // Emitir evento de error genérico (código 3)
     pipelineEvents.emitServicioError(
       idEjecucion,
       fund.ID_Fund,
@@ -401,28 +448,8 @@ class BasePipelineService {
       throw error;
     }
   }
-
-  /**
-   * Emitir actualización de fondo por WebSocket
-   * @private
-   */
-  async emitFundUpdate(idEjecucion, idFund, updates) {
-    try {
-      const wsManager = require('../websocket/WebSocketManager');
-      wsManager.emitToExecution(idEjecucion, {
-        type: 'FUND_UPDATE',
-        data: {
-          ID_Ejecucion: idEjecucion,
-          ID_Fund: idFund,
-          ...updates,
-          timestamp: new Date().toISOString(),
-        },
-      });
-    } catch (_error) {
-      // No fallar pipeline si falla WebSocket
-    }
-  }
 }
 
 module.exports = BasePipelineService;
 module.exports.StandByRequiredError = StandByRequiredError;
+module.exports.RetryExhaustedError = RetryExhaustedError;

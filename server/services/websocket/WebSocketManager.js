@@ -58,8 +58,6 @@ class WebSocketManager {
    * @param {Function} getPoolFn - Función para obtener pool de DB
    */
   initialize(server, getPoolFn = null) {
-    console.log('[WebSocketManager] Inicializando WebSocket Server...');
-
     this.getPoolFn = getPoolFn;
 
     this.wss = new WebSocket.Server({
@@ -72,8 +70,6 @@ class WebSocketManager {
 
     // Iniciar heartbeat
     this.startHeartbeat();
-
-    console.log('[WebSocketManager] ✅ WebSocket Server inicializado en /api/ws/pipeline');
   }
 
   /**
@@ -82,8 +78,6 @@ class WebSocketManager {
   handleConnection(ws, req) {
     const clientId = this.nextClientId++;
     const ip = req.socket.remoteAddress;
-
-    console.log(`[WebSocketManager] Nueva conexión - Cliente ${clientId} desde ${ip}`);
 
     // Registrar cliente
     this.clients.set(clientId, {
@@ -116,8 +110,6 @@ class WebSocketManager {
     try {
       const message = JSON.parse(data.toString());
       const { type, data: payload } = message;
-
-      console.log(`[WebSocketManager] Mensaje de cliente ${clientId}:`, type);
 
       switch (type) {
         case 'SUBSCRIBE':
@@ -152,8 +144,6 @@ class WebSocketManager {
    * Manejar cierre de conexión
    */
   handleClose(clientId) {
-    console.log(`[WebSocketManager] Cliente ${clientId} desconectado`);
-
     const client = this.clients.get(clientId);
     if (!client) return;
 
@@ -204,8 +194,6 @@ class WebSocketManager {
       this.subscriptions.set(ejecucionKey, new Set());
     }
     this.subscriptions.get(ejecucionKey).add(clientId);
-
-    console.log(`[WebSocketManager] Cliente ${clientId} suscrito a ejecución ${ejecucionKey}`);
 
     // Confirmar suscripción
     this.send(clientId, {
@@ -283,8 +271,6 @@ class WebSocketManager {
           ORDER BY ef.FundShortName
         `);
 
-      console.log(`[WebSocketManager] Enviando estado inicial a cliente ${clientId}: ${fondosResult.recordset.length} fondos`);
-
       // Enviar mensaje INITIAL_STATE
       this.send(clientId, {
         type: 'INITIAL_STATE',
@@ -326,11 +312,8 @@ class WebSocketManager {
       // Si no quedan suscriptores, limpiar el Map
       if (subscribers.size === 0) {
         this.subscriptions.delete(ejecucionKey);
-        console.log(`[WebSocketManager] No hay más suscriptores para ejecución ${ejecucionKey}`);
       }
     }
-
-    console.log(`[WebSocketManager] Cliente ${clientId} desuscrito de ejecución ${ejecucionKey}`);
   }
 
   /**
@@ -341,11 +324,8 @@ class WebSocketManager {
     const subscribers = this.subscriptions.get(ejecucionKey);
 
     if (!subscribers || subscribers.size === 0) {
-      // No hay suscriptores, no hay nada que hacer
       return;
     }
-
-    console.log(`[WebSocketManager] Emitiendo evento ${event.type} a ${subscribers.size} cliente(s) de ejecución ${ejecucionKey}`);
 
     // Enviar a cada suscriptor
     subscribers.forEach(clientId => {
@@ -382,8 +362,6 @@ class WebSocketManager {
    * Broadcast a todos los clientes conectados
    */
   broadcast(message) {
-    console.log(`[WebSocketManager] Broadcasting mensaje ${message.type} a ${this.clients.size} cliente(s)`);
-
     this.clients.forEach((client, clientId) => {
       this.send(clientId, message);
     });
@@ -393,8 +371,6 @@ class WebSocketManager {
    * Heartbeat - Ping cada 30 segundos
    */
   startHeartbeat() {
-    console.log('[WebSocketManager] Iniciando heartbeat (ping cada 30s)');
-
     this.heartbeatInterval = setInterval(() => {
       const now = new Date();
       const TIMEOUT = 60000; // 60 segundos
@@ -423,7 +399,6 @@ class WebSocketManager {
    */
   stopHeartbeat() {
     if (this.heartbeatInterval) {
-      console.log('[WebSocketManager] Deteniendo heartbeat');
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
@@ -433,8 +408,6 @@ class WebSocketManager {
    * Cerrar WebSocket Server
    */
   close() {
-    console.log('[WebSocketManager] Cerrando WebSocket Server...');
-
     // Detener heartbeat
     this.stopHeartbeat();
 
@@ -449,9 +422,7 @@ class WebSocketManager {
 
     // Cerrar WSS
     if (this.wss) {
-      this.wss.close(() => {
-        console.log('[WebSocketManager] ✅ WebSocket Server cerrado');
-      });
+      this.wss.close();
     }
   }
 

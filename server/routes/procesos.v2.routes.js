@@ -91,9 +91,6 @@ setInterval(() => {
     cleaned += toRemove.length;
   }
 
-  if (cleaned > 0) {
-    console.log(`[Cleanup] ${cleaned} ejecuciones antiguas eliminadas de memoria`);
-  }
 }, 600000); // Cada 10 minutos
 
 // ============================================
@@ -129,7 +126,6 @@ router.post('/v2/ejecutar', async (req, res) => {
       .execute('logs.sp_Inicializar_Proceso');
 
     const idProceso = initResult.output.ID_Proceso;
-    console.log(`[Proceso ${idProceso}] Inicializado correctamente para fecha ${fechaReporte}`);
 
     // Guardar en memoria para tracking
     activeExecutions.set(idProceso, {
@@ -182,8 +178,6 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
     // El proceso ya fue inicializado por sp_Inicializar_Proceso
     // con múltiples ejecuciones hijas (una por fondo) en logs.Ejecuciones
 
-    console.log(`[Proceso ${idProceso}] Iniciando Pipeline V2 para fecha ${fechaReporte}...`);
-
     // 1. Obtener todas las ejecuciones hijas del proceso (opcionalmente filtradas por fondos)
     const ejecucionesResult = await pool.request()
       .input('ID_Proceso', sql.BigInt, idProceso)
@@ -207,7 +201,6 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
       `);
 
     const ejecuciones = ejecucionesResult.recordset;
-    console.log(`[Proceso ${idProceso}] Ejecuciones cargadas: ${ejecuciones.length} fondos${fondos ? ` (filtrado: ${fondos.join(',')})` : ''}`);
 
     if (ejecuciones.length === 0) {
       throw new Error('No hay ejecuciones hijas para procesar');
@@ -242,16 +235,12 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
 
     // 4. Inicializar todos los orquestadores
     await Promise.all(orchestrators.map(orc => orc.initialize()));
-    console.log(`[Proceso ${idProceso}] ${orchestrators.length} orquestadores inicializados`);
 
     // 4.5. Ejecutar extracción batch UNA VEZ (solo en el primer orquestador)
     if (orchestrators.length > 0) {
-      console.log(`[Proceso ${idProceso}] Ejecutando extracción batch (una vez)...`);
       await orchestrators[0]._executeBatchPhasesOnce();
-      console.log(`[Proceso ${idProceso}] ✓ Extracción batch completada`);
 
       // Actualizar Estado_Extraccion a OK para todos los fondos
-      console.log(`[Proceso ${idProceso}] Actualizando Estado_Extraccion a OK...`);
       await pool.request()
         .input('ID_Proceso', sql.BigInt, idProceso)
         .query(`
@@ -261,26 +250,10 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
           INNER JOIN logs.Ejecuciones e ON ef.ID_Ejecucion = e.ID_Ejecucion
           WHERE e.ID_Proceso = @ID_Proceso
         `);
-      console.log(`[Proceso ${idProceso}] ✓ Estado_Extraccion actualizado a OK`);
     }
 
-    // 4.6. [FASE 2] Etiquetar datos extraídos con ID_Ejecucion
-    console.log(`[Proceso ${idProceso}] [FASE 2] Etiquetando datos extraídos con ID_Ejecucion...`);
-    try {
-      const taggingResult = await pool.request()
-        .input('ID_Proceso', sql.BigInt, idProceso)
-        .input('FechaReporte', sql.NVarChar(10), fechaReporte)
-        .execute('extract.Tag_Extraction_Data');
-
-      if (taggingResult.returnValue === 0) {
-        console.log(`[Proceso ${idProceso}] [FASE 2] ✓ Datos etiquetados exitosamente`);
-      } else {
-        console.warn(`[Proceso ${idProceso}] [FASE 2] Tagging SP retornó: ${taggingResult.returnValue}`);
-      }
-    } catch (taggingError) {
-      console.error(`[Proceso ${idProceso}] [FASE 2] Error etiquetando datos:`, taggingError);
-      throw new Error(`Error en Fase 2 (Tagging): ${taggingError.message}`);
-    }
+    // NOTA: Fase 2 (Tagging) eliminada - con arquitectura TEMP tables no es necesaria
+    // Los datos ya están asociados a la conexión dedicada de cada orquestador
 
     // 5. Ejecutar todos los orquestadores en paralelo (solo fases parallel/sequential)
     const results = await Promise.all(
@@ -295,37 +268,27 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
     const exitosos = results.filter(r => r.success).length;
     const fallidos = results.filter(r => !r.success).length;
 
-    console.log(`[Proceso ${idProceso}] Ejecución completada:`);
-    console.log(`  - Fondos exitosos: ${exitosos}`);
-    console.log(`  - Fondos fallidos: ${fallidos}`);
-
     // 7. Actualizar estadísticas del proceso padre
     try {
       await pool.request()
         .input('ID_Proceso', sql.BigInt, idProceso)
         .query(`
           UPDATE logs.Procesos SET
-            FondosOK = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'COMPLETADO'),
-            FondosError = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'ERROR'),
+            FondosOK = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado_Final = 'OK'),
+            FondosError = (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado_Final = 'ERROR'),
             Estado = CASE
-              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'ERROR') = 0 THEN 'COMPLETADO'
-              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado = 'COMPLETADO') = 0 THEN 'ERROR'
+              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado_Final = 'ERROR') = 0 THEN 'COMPLETADO'
+              WHEN (SELECT COUNT(*) FROM logs.Ejecuciones WHERE ID_Proceso = @ID_Proceso AND Estado_Final = 'OK') = 0 THEN 'ERROR'
               ELSE 'PARCIAL'
             END,
             FechaFin = GETDATE()
           WHERE ID_Proceso = @ID_Proceso
         `);
-    } catch (statsError) {
-      console.error(`[Proceso ${idProceso}] Error actualizando estadísticas (no crítico):`, statsError.message);
+    } catch (_statsError) {
+      // Error no crítico actualizando estadísticas
     }
 
-    // 8. NO cerrar conexiones explícitamente - dejar que el pool las maneje
-    // Las conexiones dedicadas se cerrarán automáticamente cuando Node.js libere memoria
-    // o cuando el pool las recicle. Cerrarlas explícitamente puede causar problemas
-    // cuando múltiples procesos corren en paralelo.
-    console.log(`[Proceso ${idProceso}] ✓ Conexiones dedicadas serán liberadas por el pool automáticamente`);
-
-    // 9. Actualizar estado en memoria
+    // 8. Actualizar estado en memoria
     activeExecutions.set(idProceso, {
       ...activeExecutions.get(idProceso),
       estado: fallidos > 0 ? 'PARCIAL' : 'COMPLETADO',
@@ -334,14 +297,7 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
       finalizadoEn: new Date(),
     });
 
-    console.log(`[Proceso ${idProceso}] Pipeline V2 finalizado exitosamente`);
-
   } catch (err) {
-    console.error(`[Proceso ${idProceso}] Error en Pipeline V2:`, err);
-
-    // NO cerrar conexiones explícitamente - dejar que el pool las maneje
-    console.log(`[Proceso ${idProceso}] Conexiones dedicadas serán liberadas por el pool automáticamente`);
-
     // Marcar proceso como error en BD
     try {
       await pool.request()
@@ -355,8 +311,8 @@ async function executeProcessV2(pool, idProceso, fechaReporte, fondos = null) {
               Observaciones = @Error
           WHERE ID_Proceso = @ID_Proceso
         `);
-    } catch (updateErr) {
-      console.error(`[Proceso ${idProceso}] Error actualizando estado (no crítico):`, updateErr.message);
+    } catch (_updateErr) {
+      // Error no crítico actualizando estado
     }
 
     // Actualizar estado en memoria
@@ -410,9 +366,9 @@ router.get('/v2/:idProceso/estado', async (req, res) => {
       .query(`
         SELECT
           COUNT(*) as totalFondos,
-          SUM(CASE WHEN Estado IN ('COMPLETADO', 'COMPLETADO_CON_WARNINGS') THEN 1 ELSE 0 END) as fondosCompletados,
-          SUM(CASE WHEN Estado IN ('ERROR', 'COMPLETADO_CON_ERRORES') THEN 1 ELSE 0 END) as fondosConErrores,
-          SUM(CASE WHEN Estado = 'EN_PROGRESO' THEN 1 ELSE 0 END) as fondosEnProgreso
+          SUM(CASE WHEN Estado_Final IN ('OK', 'COMPLETADO', 'COMPLETADO_CON_WARNINGS') THEN 1 ELSE 0 END) as fondosCompletados,
+          SUM(CASE WHEN Estado_Final IN ('ERROR', 'COMPLETADO_CON_ERRORES') THEN 1 ELSE 0 END) as fondosConErrores,
+          SUM(CASE WHEN Estado_Final IN ('EN_PROGRESO', 'PENDIENTE') THEN 1 ELSE 0 END) as fondosEnProgreso
         FROM logs.Ejecuciones
         WHERE ID_Proceso = @ID_Proceso
       `);
@@ -578,18 +534,18 @@ router.get('/v2/historial', async (req, res) => {
 
     let query = `
       SELECT TOP (@limit)
-        ID_Ejecucion,
+        ID_Proceso,
         FechaReporte,
         FechaInicio,
         FechaFin,
         Estado,
         Etapa_Actual,
         TotalFondos,
-        FondosExitosos,
-        FondosFallidos,
-        FondosWarning,
-        TiempoTotal_Segundos
-      FROM logs.Ejecuciones
+        FondosOK,
+        FondosError,
+        FondosStandBy,
+        Duracion_Ms
+      FROM logs.Procesos
       WHERE 1=1
     `;
 
@@ -1215,8 +1171,6 @@ router.post('/v2/:idEjecucion/resume/:idFund', async (req, res) => {
       const fechaReporte = ejecResult.recordset[0]?.FechaReporte;
 
       if (fechaReporte) {
-        // Ejecutar servicios en background
-        console.log(`[Resume] Iniciando re-ejecución de servicios para fondo ${idFund}: ${servicios.join(', ')}`);
         // TODO: Implementar lógica de orquestación para ejecutar solo servicios específicos
         // Por ahora retornamos la lista de servicios que deberían ejecutarse
       }

@@ -575,11 +575,9 @@ async function _actualizarContadorStandBy(pool, queueType, item) {
             AND ID_Fund = @ID_Fund
             AND EstadoStandBy = 'PAUSADO';
         `);
-
-      console.log(`✅ Fondo ${item.ID_Fund} listo para resume (ejecución ${item.ID_Ejecucion})`);
     }
-  } catch (error) {
-    console.warn(`[StandBy] Error actualizando contadores: ${error.message}`);
+  } catch (_error) {
+    // Error silencioso actualizando contadores
   }
 }
 
@@ -670,8 +668,6 @@ router.post('/:queueType/resolve', async (req, res) => {
                @idCurr, @nombreTupungato, @estrategiaConsFondo, @estrategiaComparador, @bm1, @bm2,
                1, @flagDerivados, @flagUBS)
             `);
-
-          console.log(`Nuevo fondo creado: ID=${newFundId}, ShortName=${asignacion.fundShortName}`);
         } else {
           // ============================================
           // MODO ASIGNAR A EXISTENTE
@@ -798,8 +794,6 @@ router.post('/:queueType/resolve', async (req, res) => {
                (SELECT TOP 1 Code FROM Inteligencia_Producto_Dev.dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @fundBaseCurrency),
                @nombreTupungato, @estrategia)
             `);
-
-          console.log(`Nuevo benchmark creado: ID=${newBenchmarkId}, ShortName=${asignacion.fundShortName}`);
         } else {
           // ============================================
           // MODO ASIGNAR A EXISTENTE

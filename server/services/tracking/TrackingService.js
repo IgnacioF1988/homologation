@@ -23,6 +23,9 @@
 
 const sql = require('mssql');
 const pipelineEvents = require('../events/PipelineEventEmitter');
+const { getInstance: getSandboxWriter } = require('../sandbox/SandboxWriterService');
+const { getInstance: getLogsWriter } = require('../logs/LogsWriterService');
+const { getFlagColumn } = require('../../constants/standby');
 
 class TrackingService {
   /**
@@ -36,6 +39,8 @@ class TrackingService {
 
     this.pool = pool;
     this.wsManager = null;
+    this.sandboxWriter = null;
+    this.logsWriter = null;
     this._initialized = false;
   }
 
@@ -46,6 +51,10 @@ class TrackingService {
     if (this._initialized) {
       return;
     }
+
+    // Inicializar servicios de escritura (singletons)
+    this.sandboxWriter = getSandboxWriter(this.pool);
+    this.logsWriter = getLogsWriter(this.pool);
 
     this._setupListeners();
     this._loadWebSocketManager();
@@ -78,30 +87,35 @@ class TrackingService {
     // Servicio iniciado -> actualizar estado a EN_PROGRESO
     pipelineEvents.on('servicio:inicio', async (data) => {
       try {
-        console.log(`[TrackingService] servicio:inicio - ${data.servicio} (ejecucion=${data.idEjecucion})`);
-        await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'EN_PROGRESO');
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'EN_PROGRESO');
         this._notifyWebSocket('SERVICIO_INICIO', data);
-      } catch (err) {
-        console.error(`[TrackingService] Error en servicio:inicio:`, err.message);
+      } catch (_err) {
+        // Error silencioso
       }
     });
 
     // Servicio terminado OK -> actualizar estado a OK
     pipelineEvents.on('servicio:fin', async (data) => {
       try {
-        console.log(`[TrackingService] servicio:fin - ${data.servicio} (ejecucion=${data.idEjecucion})`);
-        await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'OK');
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'OK');
         this._notifyWebSocket('SERVICIO_FIN', data);
-      } catch (err) {
-        console.error(`[TrackingService] Error en servicio:fin:`, err.message);
+      } catch (_err) {
+        // Error silencioso
       }
     });
 
-    // Servicio con error -> actualizar estado + registrar evento
+    // Servicio con error -> actualizar estado + registrar evento + registrar fondo problema
+    // TRANSACCION: Todas las operaciones son atómicas
     pipelineEvents.on('servicio:error', async (data) => {
+      const transaction = new sql.Transaction(this.pool);
       try {
-        await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'ERROR');
-        await this._registrarEvento(
+        await transaction.begin();
+
+        // 1. Actualizar estado del servicio (usa SP)
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'ERROR');
+
+        // 2. Registrar evento detallado
+        await this.logsWriter.registrarEvento(
           data.idEjecucion,
           data.idFund,
           'ERROR',
@@ -109,19 +123,79 @@ class TrackingService {
           data.subEtapa,
           data.error.message,
           data.error.stack,
-          { code: data.error.code, name: data.error.name }
+          { code: data.error.code, name: data.error.name },
+          transaction
         );
-        await this._updateErrorInfo(data.idEjecucion, data.servicio, data.error.message);
+
+        // 3. Actualizar info de error
+        await this.logsWriter.actualizarErrorInfo(data.idEjecucion, data.servicio, data.error.message, transaction);
+
+        // 4. Delegar a SandboxWriterService (con transacción)
+        await this.sandboxWriter.escribirFondoProblema(data.idEjecucion, data.idFund, data.servicio, 'ERROR_PROCESO', transaction);
+
+        await transaction.commit();
         this._notifyWebSocket('SERVICIO_ERROR', data);
       } catch (err) {
-        // Error silencioso
+        try {
+          await transaction.rollback();
+        } catch (_rollbackErr) {
+          // Ignorar error de rollback
+        }
+        console.error('[TrackingService] Error en servicio:error handler:', err.message);
+      }
+    });
+
+    // Código 4: Retry exhausted -> registrar como error especial
+    // TRANSACCION: Todas las operaciones son atómicas
+    pipelineEvents.on('retry:exhausted', async (data) => {
+      const transaction = new sql.Transaction(this.pool);
+      try {
+        await transaction.begin();
+
+        // 1. Actualizar estado del servicio (usa SP)
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'ERROR');
+
+        // 2. Registrar evento detallado
+        await this.logsWriter.registrarEvento(
+          data.idEjecucion,
+          data.idFund,
+          'RETRY_EXHAUSTED',
+          data.servicio,
+          data.spName,
+          `Reintentos agotados (${data.attempts} intentos): ${data.error.message}`,
+          null,
+          {
+            attempts: data.attempts,
+            isDeadlock: data.error.isDeadlock,
+            isTimeout: data.error.isTimeout,
+            isConnection: data.error.isConnection,
+            originalCode: data.error.code
+          },
+          transaction
+        );
+
+        // 3. Actualizar info de error
+        await this.logsWriter.actualizarErrorInfo(data.idEjecucion, data.servicio, `RETRY_EXHAUSTED: ${data.error.message}`, transaction);
+
+        // 4. Delegar a SandboxWriterService (con transacción)
+        await this.sandboxWriter.escribirFondoProblema(data.idEjecucion, data.idFund, data.servicio, 'RETRY_EXHAUSTED', transaction);
+
+        await transaction.commit();
+        this._notifyWebSocket('RETRY_EXHAUSTED', data);
+      } catch (err) {
+        try {
+          await transaction.rollback();
+        } catch (_rollbackErr) {
+          // Ignorar error de rollback
+        }
+        console.error('[TrackingService] Error en retry:exhausted handler:', err.message);
       }
     });
 
     // Warning -> registrar evento (no cambia estado)
     pipelineEvents.on('servicio:warning', async (data) => {
       try {
-        await this._registrarEvento(
+        await this.logsWriter.registrarEvento(
           data.idEjecucion,
           data.idFund,
           'WARNING',
@@ -132,7 +206,7 @@ class TrackingService {
           data.datos
         );
         this._notifyWebSocket('SERVICIO_WARNING', data);
-      } catch (err) {
+      } catch (_err) {
         // Error silencioso
       }
     });
@@ -140,9 +214,9 @@ class TrackingService {
     // Servicio omitido -> actualizar estado a N/A u OMITIDO
     pipelineEvents.on('servicio:omitido', async (data) => {
       try {
-        await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'N/A');
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'N/A');
         this._notifyWebSocket('SERVICIO_OMITIDO', data);
-      } catch (err) {
+      } catch (_err) {
         // Error silencioso
       }
     });
@@ -152,11 +226,20 @@ class TrackingService {
     // =============================================
 
     // Stand-by activado -> actualizar estado + registrar stand-by + evento + sandbox
+    // TRANSACCION: Todas las operaciones son atómicas
     pipelineEvents.on('standby:activado', async (data) => {
+      const transaction = new sql.Transaction(this.pool);
       try {
-        await this._updateEstadoServicio(data.idEjecucion, data.servicio, 'STAND_BY');
-        await this._registrarStandBy(data);
-        await this._registrarEvento(
+        await transaction.begin();
+
+        // 1. Actualizar estado del servicio (usa SP)
+        await this.logsWriter.actualizarEstadoServicio(data.idEjecucion, data.servicio, 'STAND_BY');
+
+        // 2. Registrar stand-by en logs.StandBy
+        await this.logsWriter.registrarStandBy(data, transaction);
+
+        // 3. Registrar evento detallado
+        await this.logsWriter.registrarEvento(
           data.idEjecucion,
           data.idFund,
           'STAND_BY',
@@ -164,23 +247,49 @@ class TrackingService {
           data.detalles.puntoBloqueo,
           `Stand-by codigo ${data.codigoStandBy}: ${data.detalles.tipoProblema}`,
           null,
-          data.detalles
+          data.detalles,
+          transaction
         );
-        await this._updateFlagsProblema(data.idEjecucion, data.detalles.tipoProblema);
 
-        // Escribir datos de homologación a sandbox (si existen)
-        const homologData = data.detalles.homologacionData;
-        console.log(`[TrackingService] standby:activado - homologacionData length: ${homologData?.length || 0}`);
-        if (homologData && homologData.length > 0) {
-          console.log(`[TrackingService] Escribiendo ${homologData.length} items a sandbox...`);
-          await this._escribirHomologacionSandbox(data.idEjecucion, homologData);
-          console.log(`[TrackingService] Sandbox escrito OK`);
-        }
+        // 4. Actualizar flags de problema
+        await this.logsWriter.actualizarFlagsProblema(data.idEjecucion, data.detalles.tipoProblema, transaction);
 
+        // 5. Delegar escritura sandbox (con transacción)
+        await this.sandboxWriter.escribirPorCodigo(data.codigoStandBy, data.idEjecucion, data, transaction);
+
+        await transaction.commit();
         this._notifyWebSocket('STANDBY_ACTIVADO', data);
       } catch (err) {
-        console.error(`[TrackingService] Error en standby:activado:`, err.message);
+        // Rollback si algo falla
+        try {
+          await transaction.rollback();
+        } catch (_rollbackErr) {
+          // Ignorar error de rollback
+        }
+        // Log error real en lugar de silencioso
+        console.error('[TrackingService] Error en standby:activado handler:', err.message);
       }
+    });
+
+    // =============================================
+    // EVENTOS DE SP (tracking granular)
+    // =============================================
+
+    // SP completado -> notificar WebSocket para UI en tiempo real
+    // NOTA: El tracking granular (Estado_IPA_01_*, etc.) requiere columnas
+    // adicionales en logs.Ejecuciones que no están implementadas aún.
+    // Por ahora solo notificamos via WebSocket para feedback en tiempo real.
+    pipelineEvents.on('sp:completado', (data) => {
+      this._notifyWebSocket('SP_COMPLETADO', {
+        idEjecucion: data.idEjecucion,
+        idFund: data.idFund,
+        servicio: data.servicio,
+        spName: data.spName,
+        subStateField: data.subStateField,
+        duracionMs: data.duracionMs,
+        rowsProcessed: data.rowsProcessed,
+        timestamp: data.timestamp
+      });
     });
 
     // =============================================
@@ -195,9 +304,9 @@ class TrackingService {
     // Proceso terminado -> actualizar stats
     pipelineEvents.on('proceso:fin', async (data) => {
       try {
-        await this._finalizarProceso(data.idProceso, data.resumen);
+        await this.logsWriter.finalizarProceso(data.idProceso, data.resumen);
         this._notifyWebSocket('PROCESO_FIN', data);
-      } catch (err) {
+      } catch (_err) {
         // Error silencioso
       }
     });
@@ -212,9 +321,9 @@ class TrackingService {
 
     pipelineEvents.on('ejecucion:fin', async (data) => {
       try {
-        await this._finalizarEjecucion(data.idEjecucion, data.estadoFinal);
+        await this.logsWriter.finalizarEjecucion(data.idEjecucion, data.estadoFinal);
         this._notifyWebSocket('EJECUCION_FIN', data);
-      } catch (err) {
+      } catch (_err) {
         // Error silencioso
       }
     });
@@ -232,13 +341,7 @@ class TrackingService {
    * @returns {Promise<number>} ID del proceso creado
    */
   async initializeProceso(fechaReporte, totalFondos = 0, usuario = null) {
-    const request = this.pool.request();
-    request.input('FechaReporte', sql.NVarChar(10), fechaReporte);
-    request.input('Usuario', sql.NVarChar(100), usuario);
-    request.output('ID_Proceso', sql.BigInt);
-
-    const result = await request.execute('logs.sp_Inicializar_Proceso');
-    const idProceso = result.output.ID_Proceso;
+    const idProceso = await this.logsWriter.inicializarProceso(fechaReporte, usuario);
 
     // Emitir evento de inicio
     pipelineEvents.emitProcesoInicio(idProceso, fechaReporte, totalFondos, usuario);
@@ -255,18 +358,7 @@ class TrackingService {
    * @returns {Promise<number>} ID de la ejecucion creada
    */
   async initializeEjecucion(idProceso, idFund, fundShortName, portfolios = {}) {
-    const request = this.pool.request();
-    request.input('ID_Proceso', sql.BigInt, idProceso);
-    request.input('ID_Fund', sql.Int, idFund);
-    request.input('FundShortName', sql.VarChar(50), fundShortName);
-    request.input('Portfolio_Geneva', sql.VarChar(50), portfolios.geneva || null);
-    request.input('Portfolio_CAPM', sql.VarChar(50), portfolios.capm || null);
-    request.input('Portfolio_Derivados', sql.VarChar(50), portfolios.derivados || null);
-    request.input('Portfolio_UBS', sql.VarChar(50), portfolios.ubs || null);
-    request.output('ID_Ejecucion', sql.BigInt);
-
-    const result = await request.execute('logs.sp_Inicializar_Ejecucion');
-    const idEjecucion = result.output.ID_Ejecucion;
+    const idEjecucion = await this.logsWriter.inicializarEjecucion(idProceso, idFund, fundShortName, portfolios);
 
     // Emitir evento
     pipelineEvents.emitEjecucionInicio(idEjecucion, idFund, fundShortName);
@@ -281,15 +373,13 @@ class TrackingService {
    * @param {number} duracionMs - Duracion total opcional
    */
   async finalizarEjecucion(idEjecucion, estadoFinal, duracionMs = null) {
-    await this._finalizarEjecucion(idEjecucion, estadoFinal);
+    await this.logsWriter.finalizarEjecucion(idEjecucion, estadoFinal);
 
     // Obtener ID_Fund para el evento
-    const result = await this.pool.request()
-      .input('idEjecucion', sql.BigInt, idEjecucion)
-      .query('SELECT ID_Fund FROM logs.Ejecuciones WHERE ID_Ejecucion = @idEjecucion');
+    const idFund = await this.logsWriter.getIdFundFromEjecucion(idEjecucion);
 
-    if (result.recordset.length > 0) {
-      pipelineEvents.emitEjecucionFin(idEjecucion, result.recordset[0].ID_Fund, estadoFinal, duracionMs);
+    if (idFund) {
+      pipelineEvents.emitEjecucionFin(idEjecucion, idFund, estadoFinal, duracionMs);
     }
   }
 
@@ -299,7 +389,7 @@ class TrackingService {
    * @param {object} resumen - Resumen de fondos
    */
   async finalizarProceso(idProceso, resumen = {}) {
-    await this._finalizarProceso(idProceso, resumen);
+    await this.logsWriter.finalizarProceso(idProceso, resumen);
     pipelineEvents.emitProcesoFin(idProceso, resumen);
   }
 
@@ -456,194 +546,32 @@ class TrackingService {
   }
 
   // =============================================
-  // METODOS PRIVADOS - PERSISTENCIA
+  // METODOS PRIVADOS
   // =============================================
-
-  /**
-   * Actualiza el estado de un servicio en la BD
-   * @private
-   */
-  async _updateEstadoServicio(idEjecucion, servicio, estado) {
-    const request = this.pool.request();
-    request.input('ID_Ejecucion', sql.BigInt, idEjecucion);
-    request.input('Servicio', sql.NVarChar(50), servicio);
-    request.input('Estado', sql.NVarChar(20), estado);
-
-    await request.execute('logs.sp_Actualizar_Estado');
-  }
-
-  /**
-   * Registra un evento detallado en la BD
-   * @private
-   */
-  async _registrarEvento(idEjecucion, idFund, nivel, servicio, subEtapa, mensaje, stackTrace, datos) {
-    const request = this.pool.request();
-    request.input('idEjecucion', sql.BigInt, idEjecucion);
-    request.input('idFund', sql.Int, idFund);
-    request.input('nivel', sql.NVarChar(10), nivel);
-    request.input('servicio', sql.NVarChar(50), servicio);
-    request.input('subEtapa', sql.NVarChar(100), subEtapa);
-    request.input('mensaje', sql.NVarChar(1000), (mensaje || '').substring(0, 1000));
-    request.input('stackTrace', sql.NVarChar(sql.MAX), stackTrace);
-    request.input('datos', sql.NVarChar(sql.MAX), datos ? JSON.stringify(datos) : null);
-
-    await request.query(`
-      INSERT INTO logs.EventosDetallados
-        (ID_Ejecucion, ID_Fund, Nivel, Servicio, SubEtapa, Mensaje, Stack_Trace, Datos_JSON)
-      VALUES
-        (@idEjecucion, @idFund, @nivel, @servicio, @subEtapa, @mensaje, @stackTrace, @datos)
-    `);
-  }
-
-  /**
-   * Registra un stand-by en la BD
-   * @private
-   */
-  async _registrarStandBy(data) {
-    const request = this.pool.request();
-    request.input('idEjecucion', sql.BigInt, data.idEjecucion);
-    request.input('idFund', sql.Int, data.idFund);
-    request.input('tipoProblema', sql.NVarChar(50), data.detalles.tipoProblema);
-    request.input('codigoStandBy', sql.Int, data.codigoStandBy);
-    request.input('servicio', sql.NVarChar(50), data.servicio);
-    request.input('puntoBloqueo', sql.NVarChar(100), data.detalles.puntoBloqueo);
-    request.input('cantidad', sql.Int, data.detalles.cantidad || 1);
-    request.input('tablaReferencia', sql.NVarChar(100), data.detalles.tablaReferencia);
-    request.input('motivo', sql.NVarChar(sql.MAX), data.detalles.motivo);
-
-    await request.query(`
-      INSERT INTO logs.StandBy
-        (ID_Ejecucion, ID_Fund, TipoProblema, CodigoStandBy, ServicioBloqueante,
-         PuntoBloqueo, CantidadProblemas, TablaColaReferencia, MotivoDetallado)
-      VALUES
-        (@idEjecucion, @idFund, @tipoProblema, @codigoStandBy, @servicio,
-         @puntoBloqueo, @cantidad, @tablaReferencia, @motivo)
-    `);
-  }
-
-  /**
-   * Actualiza info de error en la ejecucion
-   * @private
-   */
-  async _updateErrorInfo(idEjecucion, pasoConError, mensajeError) {
-    const request = this.pool.request();
-    request.input('idEjecucion', sql.BigInt, idEjecucion);
-    request.input('pasoConError', sql.NVarChar(100), pasoConError);
-    request.input('mensajeError', sql.NVarChar(sql.MAX), mensajeError);
-
-    await request.query(`
-      UPDATE logs.Ejecuciones
-      SET Paso_Con_Error = @pasoConError,
-          Mensaje_Error = @mensajeError
-      WHERE ID_Ejecucion = @idEjecucion
-    `);
-  }
-
-  /**
-   * Actualiza flags de problema en la ejecucion
-   * @private
-   */
-  async _updateFlagsProblema(idEjecucion, tipoProblema) {
-    const columna = {
-      'SUCIEDADES': 'TieneSuciedades',
-      'HOMOLOGACION': 'TieneProblemasHomologacion',
-      'DESCUADRES_CAPM': 'TieneDescuadres',
-      'DESCUADRES_GENERAL': 'TieneDescuadres'
-    }[tipoProblema];
-
-    if (columna) {
-      const request = this.pool.request();
-      request.input('idEjecucion', sql.BigInt, idEjecucion);
-
-      await request.query(`
-        UPDATE logs.Ejecuciones
-        SET ${columna} = 1
-        WHERE ID_Ejecucion = @idEjecucion
-      `);
-    }
-  }
-
-  /**
-   * Escribe datos de homologación al schema sandbox
-   * @param {number} idEjecucion - ID de la ejecución
-   * @param {Array} homologacionData - Datos de homologación del SP
-   * @private
-   */
-  async _escribirHomologacionSandbox(idEjecucion, homologacionData) {
-    // Obtener FechaReporte desde el proceso
-    const fechaResult = await this.pool.request()
-      .input('idEjecucion', sql.BigInt, idEjecucion)
-      .query(`
-        SELECT CONVERT(VARCHAR(10), p.FechaReporte, 120) AS FechaReporte
-        FROM logs.Ejecuciones e
-        INNER JOIN logs.Procesos p ON e.ID_Proceso = p.ID_Proceso
-        WHERE e.ID_Ejecucion = @idEjecucion
-      `);
-
-    const fechaReporte = fechaResult.recordset[0]?.FechaReporte || new Date().toISOString().split('T')[0];
-    const fechaProceso = new Date().toISOString();
-
-    // Agrupar por tipo de homologación
-    const fondos = homologacionData.filter(h => h.TipoHomologacion === 'FONDO');
-    const instrumentos = homologacionData.filter(h => h.TipoHomologacion === 'INSTRUMENTO');
-    const monedas = homologacionData.filter(h => h.TipoHomologacion === 'MONEDA');
-
-    // Insertar fondos no homologados (bulk)
-    if (fondos.length > 0) {
-      const fondosValues = fondos.map(item =>
-        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}')`
-      ).join(',\n');
-      await this.pool.request().query(`
-        INSERT INTO sandbox.Homologacion_Fondos (FechaReporte, Fondo, Source, FechaProceso)
-        VALUES ${fondosValues}
-      `);
-    }
-
-    // Insertar instrumentos no homologados (bulk)
-    if (instrumentos.length > 0) {
-      const instValues = instrumentos.map(item =>
-        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}', '${(item.Currency || '').replace(/'/g, "''")}')`
-      ).join(',\n');
-      await this.pool.request().query(`
-        INSERT INTO sandbox.Homologacion_Instrumentos (FechaReporte, Instrumento, Source, FechaProceso, Currency)
-        VALUES ${instValues}
-      `);
-    }
-
-    // Insertar monedas no homologadas (bulk)
-    if (monedas.length > 0) {
-      const monedasValues = monedas.map(item =>
-        `('${fechaReporte}', '${(item.Item || '').replace(/'/g, "''")}', '${item.Source || 'GENEVA'}', '${fechaProceso}')`
-      ).join(',\n');
-      await this.pool.request().query(`
-        INSERT INTO sandbox.Homologacion_Monedas (FechaReporte, Moneda, Source, FechaProceso)
-        VALUES ${monedasValues}
-      `);
-    }
-  }
-
-  /**
-   * Finaliza una ejecucion
-   * @private
-   */
-  async _finalizarEjecucion(idEjecucion, estadoFinal) {
-    const request = this.pool.request();
-    request.input('ID_Ejecucion', sql.BigInt, idEjecucion);
-    request.input('Estado_Final', sql.NVarChar(20), estadoFinal);
-
-    await request.execute('logs.sp_Finalizar_Ejecucion');
-  }
-
-  /**
-   * Finaliza un proceso
-   * @private
-   */
-  async _finalizarProceso(idProceso, resumen) {
-    const request = this.pool.request();
-    request.input('ID_Proceso', sql.BigInt, idProceso);
-
-    await request.execute('logs.sp_Finalizar_Proceso');
-  }
+  // Los métodos de escritura logs fueron movidos a:
+  // server/services/logs/LogsWriterService.js
+  // - inicializarProceso
+  // - inicializarEjecucion
+  // - actualizarEstadoServicio
+  // - actualizarErrorInfo
+  // - actualizarFlagsProblema
+  // - registrarEvento
+  // - registrarStandBy
+  // - finalizarEjecucion
+  // - finalizarProceso
+  //
+  // Los métodos de escritura sandbox fueron movidos a:
+  // server/services/sandbox/SandboxWriterService.js
+  // - escribirHomologacionInstrumentos (código 6)
+  // - escribirHomologacionFondos (código 10)
+  // - escribirHomologacionMonedas (código 11)
+  // - escribirHomologacionBenchmarks (código 12)
+  // - escribirDescuadreCash (código 7)
+  // - escribirDescuadreDerivados (código 8)
+  // - escribirDescuadreNAV (código 9)
+  // - escribirSuciedades (código 5)
+  // - escribirFondoProblema
+  // =============================================
 
   /**
    * Notifica via WebSocket

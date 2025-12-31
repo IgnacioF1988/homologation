@@ -154,8 +154,6 @@ class DependencyResolver {
 
     // Cachear resultado
     this.executionOrder = result;
-
-    console.log('[DependencyResolver] Orden de ejecución calculado:', result);
     return result;
   }
 

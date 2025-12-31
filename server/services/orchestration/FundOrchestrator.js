@@ -140,9 +140,10 @@ class FundOrchestrator {
    * Ejecutar fases BATCH una vez
    */
   async _executeBatchPhasesOnce() {
+    const fund = this.fondos[0]; // Usar primer fondo como contexto para batch
     for (const phase of this.executionPlan) {
       if (phase.type === 'batch') {
-        await this._executeBatchPhase(phase);
+        await this._executeBatchPhase(phase, fund);
       }
     }
   }
@@ -152,13 +153,14 @@ class FundOrchestrator {
    */
   async execute() {
     const fund = this.fondos[0];
+    this._executionHadStandBy = false; // Track si hubo stand-by
 
     try {
       pipelineEvents.emitEjecucionInicio(this.idEjecucion, fund.ID_Fund, fund.FundShortName);
 
       for (const phase of this.executionPlan) {
         if (phase.type === 'batch') {
-          await this._executeBatchPhase(phase, fund);
+          continue; // SKIP: Las fases batch ya fueron ejecutadas por _executeBatchPhasesOnce()
         } else if (phase.type === 'parallel') {
           await this._executeParallelPhase(phase);
         } else if (phase.type === 'sequential') {
@@ -166,8 +168,10 @@ class FundOrchestrator {
         }
       }
 
-      pipelineEvents.emitEjecucionFin(this.idEjecucion, fund.ID_Fund, 'OK', 0);
-      return { success: true, idEjecucion: this.idEjecucion };
+      // Determinar estado final basado en si hubo stand-by
+      const estadoFinal = this._executionHadStandBy ? 'STAND_BY' : 'OK';
+      pipelineEvents.emitEjecucionFin(this.idEjecucion, fund.ID_Fund, estadoFinal, 0);
+      return { success: !this._executionHadStandBy, idEjecucion: this.idEjecucion };
 
     } catch (error) {
       pipelineEvents.emitEjecucionFin(this.idEjecucion, fund.ID_Fund, 'ERROR', 0);
@@ -208,16 +212,6 @@ class FundOrchestrator {
   }
 
   /**
-   * Etiquetar datos extraídos con ID_Ejecucion
-   */
-  async _tagExtractionData() {
-    await this.pool.request()
-      .input('ID_Proceso', sql.BigInt, this.idProceso)
-      .input('FechaReporte', sql.NVarChar(10), this.fechaReporte)
-      .execute('extract.Tag_Extraction_Data');
-  }
-
-  /**
    * Ejecutar fase PARALLEL
    * @private
    */
@@ -235,27 +229,12 @@ class FundOrchestrator {
   /**
    * Verificar si fondo debe ser excluido
    * @private
+   * NOTA: Deshabilitado temporalmente - con arquitectura TEMP tables,
+   * la validación de tablas físicas extract.* no aplica
    */
-  async _shouldExecuteFund(fund, fechaReporte) {
-    try {
-      const result = await this.pool.request()
-        .input('FechaReporte', sql.NVarChar(10), fechaReporte)
-        .input('ID_Fund', sql.Int, fund.ID_Fund)
-        .query(`
-          SELECT Proceso, Tipo_Problema
-          FROM sandbox.Fondos_Problema
-          WHERE FechaReporte = @FechaReporte AND ID_Fund = @ID_Fund
-        `);
-
-      if (result.recordset.length > 0) {
-        pipelineEvents.emitServicioOmitido(this.idEjecucion, fund.ID_Fund, 'PIPELINE', 'Fondo en Fondos_Problema');
-        return false;
-      }
-
-      return true;
-    } catch (_error) {
-      return true; // Fail-safe
-    }
+  async _shouldExecuteFund(_fund, _fechaReporte) {
+    // TODO: Reimplementar validación compatible con TEMP tables
+    return true;
   }
 
   /**
@@ -264,13 +243,14 @@ class FundOrchestrator {
    */
   async _checkFundStandByStatus(fund, serviceId) {
     try {
+      // NOTA: Ahora leemos de logs.Ejecuciones en lugar de logs.Ejecucion_Fondos
+      // Las columnas EstadoStandBy y PuntoBloqueoActual se actualizan desde TrackingService
       const result = await this.pool.request()
         .input('ID_Ejecucion', sql.BigInt, this.idEjecucion)
-        .input('ID_Fund', sql.Int, fund.ID_Fund)
         .query(`
           SELECT EstadoStandBy, PuntoBloqueoActual
-          FROM logs.Ejecucion_Fondos
-          WHERE ID_Ejecucion = @ID_Ejecucion AND ID_Fund = @ID_Fund
+          FROM logs.Ejecuciones
+          WHERE ID_Ejecucion = @ID_Ejecucion
         `);
 
       if (!result.recordset[0] || result.recordset[0].EstadoStandBy !== 'PAUSADO') {
@@ -303,20 +283,27 @@ class FundOrchestrator {
    */
   async _executeFundServices(fund, serviceIds) {
     let fundProcessedOK = true;
+    let isStandBy = false;
+    let failedServiceId = null;
 
     try {
       const shouldExecute = await this._shouldExecuteFund(fund, this.fechaReporte);
-      if (!shouldExecute) return;
+      if (!shouldExecute) {
+        return;
+      }
 
       for (const serviceId of serviceIds) {
         const service = this.serviceInstances.get(serviceId);
-        if (!service) continue;
+        if (!service) {
+          continue;
+        }
 
-        // Verificar stand-by
+        // Verificar stand-by previo
         const standByStatus = await this._checkFundStandByStatus(fund, serviceId);
         if (standByStatus.isPaused) {
           pipelineEvents.emitServicioOmitido(this.idEjecucion, fund.ID_Fund, serviceId, 'Stand-by activo');
           fundProcessedOK = false;
+          isStandBy = true;
           break;
         }
 
@@ -337,20 +324,43 @@ class FundOrchestrator {
           if (!result.success) {
             await this._handleServiceError(service, fund, result.error);
             fundProcessedOK = false;
+            failedServiceId = serviceId;
+
+            // Detectar si fue stand-by (error con nombre StandByRequiredError)
+            if (result.error?.name === 'StandByRequiredError') {
+              isStandBy = true;
+            }
+            break; // No continuar con más servicios si hubo error
           }
         } catch (error) {
           await this._handleServiceError(service, fund, error);
           fundProcessedOK = false;
+          failedServiceId = serviceId;
+
+          // Detectar si fue stand-by
+          if (error?.name === 'StandByRequiredError') {
+            isStandBy = true;
+          }
+          break; // No continuar con más servicios si hubo error
         }
       }
 
-      // Consolidar a CUBO si OK
+      // Consolidar a CUBO solo si todos los servicios fueron OK
       if (fundProcessedOK) {
         await this._consolidateFundToCubo(fund);
+      } else {
+        // ROLLBACK: Limpiar temp tables cuando hay error o stand-by
+        await this._cleanupTempTables(fund);
+
+        // Marcar que hubo stand-by para el estado final
+        if (isStandBy) {
+          this._executionHadStandBy = true;
+        }
       }
 
     } catch (_error) {
-      // Error ya manejado
+      // Error ya manejado, pero asegurar cleanup
+      await this._cleanupTempTables(fund);
     }
   }
 
@@ -417,6 +427,47 @@ class FundOrchestrator {
       throw error;
     }
     // STOP_FUND y CONTINUE: no lanzar error
+  }
+
+  /**
+   * Limpiar todas las temp tables de un fondo (rollback)
+   * Se ejecuta cuando hay error o stand-by para liberar recursos
+   * @private
+   */
+  async _cleanupTempTables(fund) {
+    const tempTablePatterns = [
+      '##IPA_Work',
+      '##IPA_Final',
+      '##CAPM_Work',
+      '##Derivados_Work',
+      '##Derivados_Final',
+      '##PNL_Work',
+      '##PNL_Final',
+      '##UBS_Work'
+    ];
+
+    const suffix = `_${this.idEjecucion}_${fund.ID_Fund}`;
+    let droppedCount = 0;
+
+    for (const pattern of tempTablePatterns) {
+      const tableName = pattern + suffix;
+      try {
+        // Verificar si existe antes de intentar DROP
+        const checkResult = await this.dedicatedConnection.request().query(`
+          IF OBJECT_ID('tempdb..${tableName}', 'U') IS NOT NULL
+            SELECT 1 AS Exists
+          ELSE
+            SELECT 0 AS Exists
+        `);
+
+        if (checkResult.recordset[0]?.Exists === 1) {
+          await this.dedicatedConnection.request().query(`DROP TABLE ${tableName}`);
+          droppedCount++;
+        }
+      } catch (_err) {
+        // Ignorar errores de DROP - la tabla puede no existir o ya fue eliminada
+      }
+    }
   }
 }
 

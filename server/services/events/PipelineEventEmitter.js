@@ -7,19 +7,22 @@
  * - WebSocket notifica al frontend
  *
  * EVENTOS DISPONIBLES:
- * - servicio:inicio   -> Servicio comienza ejecucion
- * - servicio:fin      -> Servicio termina OK
- * - servicio:error    -> Servicio termina con error
- * - servicio:warning  -> Warning no bloqueante
- * - servicio:omitido  -> Servicio omitido (condicional o exclusion)
- * - standby:activado  -> Fondo entra en stand-by
- * - proceso:inicio    -> Proceso (batch) comienza
- * - proceso:fin       -> Proceso (batch) termina
+ * - servicio:inicio     -> Servicio comienza ejecucion
+ * - servicio:fin        -> Servicio termina OK
+ * - servicio:error      -> Servicio termina con error (código 3)
+ * - servicio:warning    -> Warning no bloqueante
+ * - servicio:omitido    -> Servicio omitido (condicional o exclusion)
+ * - retry:exhausted     -> Reintentos agotados (código 4)
+ * - sp:completado       -> SP individual completado (tracking granular)
+ * - standby:activado    -> Fondo entra en stand-by (códigos 5-9)
+ * - proceso:inicio      -> Proceso (batch) comienza
+ * - proceso:fin         -> Proceso (batch) termina
  *
  * @module PipelineEventEmitter
  */
 
 const EventEmitter = require('events');
+const { getTipoProblema } = require('../../constants/standby');
 
 class PipelineEventEmitter extends EventEmitter {
   constructor() {
@@ -129,6 +132,34 @@ class PipelineEventEmitter extends EventEmitter {
   }
 
   // =============================================
+  // EVENTOS DE SP (granular)
+  // =============================================
+
+  /**
+   * Emite evento de SP completado (tracking granular)
+   * @param {number} idEjecucion - ID de la ejecucion
+   * @param {number} idFund - ID del fondo
+   * @param {string} servicio - Nombre del servicio (IPA, CAPM, etc.)
+   * @param {string} spName - Nombre del stored procedure
+   * @param {string} subStateField - Columna de estado granular (Estado_IPA_01_*, etc.)
+   * @param {number} duracionMs - Duracion en millisegundos
+   * @param {object} metadata - Datos adicionales opcionales
+   */
+  emitSPCompletado(idEjecucion, idFund, servicio, spName, subStateField, duracionMs, metadata = {}) {
+    this.emit('sp:completado', {
+      idEjecucion,
+      idFund,
+      servicio,
+      spName,
+      subStateField,
+      duracionMs,
+      rowsProcessed: metadata.rowsProcessed || 0,
+      errorCount: metadata.errorCount || 0,
+      timestamp: new Date()
+    });
+  }
+
+  // =============================================
   // EVENTOS DE STAND-BY
   // =============================================
 
@@ -141,7 +172,8 @@ class PipelineEventEmitter extends EventEmitter {
    * @param {object} detalles - Detalles del problema
    */
   emitStandByActivado(idEjecucion, idFund, codigoStandBy, servicio, detalles) {
-    const tipoProblema = this._getTipoProblema(codigoStandBy);
+    // Usar funcion centralizada de constants/standby.js
+    const tipoProblema = getTipoProblema(codigoStandBy);
 
     this.emit('standby:activado', {
       idEjecucion,
@@ -160,18 +192,36 @@ class PipelineEventEmitter extends EventEmitter {
     });
   }
 
+  // =============================================
+  // EVENTOS DE RETRY EXHAUSTED (código 4)
+  // =============================================
+
   /**
-   * Mapea codigo de stand-by a tipo de problema
-   * @private
+   * Emite evento de reintentos agotados
+   * @param {number} idEjecucion - ID de la ejecucion
+   * @param {number} idFund - ID del fondo
+   * @param {string} servicio - Nombre del servicio
+   * @param {string} spName - Nombre del SP que falló
+   * @param {number} attempts - Número de intentos realizados
+   * @param {Error} originalError - Error original (deadlock, timeout, etc.)
    */
-  _getTipoProblema(codigoStandBy) {
-    const tipos = {
-      5: 'SUCIEDADES',
-      6: 'HOMOLOGACION',
-      7: 'DESCUADRES_CAPM',
-      8: 'DESCUADRES_GENERAL'
-    };
-    return tipos[codigoStandBy] || 'DESCONOCIDO';
+  emitRetryExhausted(idEjecucion, idFund, servicio, spName, attempts, originalError) {
+    this.emit('retry:exhausted', {
+      idEjecucion,
+      idFund,
+      servicio,
+      spName,
+      attempts,
+      error: {
+        message: originalError.message || String(originalError),
+        code: originalError.code || originalError.number || null,
+        name: originalError.name || 'Error',
+        isDeadlock: originalError.number === 1205,
+        isTimeout: originalError.code === 'ETIMEOUT',
+        isConnection: originalError.code === 'ECONNRESET' || originalError.code === 'ESOCKET'
+      },
+      timestamp: new Date()
+    });
   }
 
   // =============================================

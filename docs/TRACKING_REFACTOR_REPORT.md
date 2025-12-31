@@ -2,7 +2,7 @@
 
 **Fecha:** 2025-12-30
 **Autor:** Claude Code
-**Estado:** Plan aprobado, listo para implementación
+**Estado:** IMPLEMENTADO (2025-12-30)
 
 ---
 
@@ -373,12 +373,27 @@ grep -r "ExecutionTracker\|LoggingService\|TraceService" server/
 3. **WebSocket falla:** Tests E2E antes de deploy
 4. **Performance:** Índices optimizados en nuevas tablas
 
-### Próximos Pasos
+### Estado de Implementación (Actualizado 2025-12-30)
 
 1. ✅ Plan aprobado
-2. ⏳ Fase 1: Crear nuevo schema BD
-3. ⏳ Fase 2: Crear TrackingService
-4. ⏳ Fase 3: Limpiar BasePipelineService
-5. ⏳ Fase 4: Limpiar servicios del pipeline
-6. ⏳ Fase 5: Actualizar orchestrator y routes
-7. ⏳ Fase 6: Eliminar código obsoleto
+2. ✅ Fase 1: Nuevo schema BD (logs.Ejecuciones, logs.EventosDetallados, logs.StandBy)
+3. ✅ Fase 2: TrackingService creado y funcionando (event-driven)
+4. ✅ Fase 3: BasePipelineService emite eventos via PipelineEventEmitter
+5. ✅ Fase 4: Servicios del pipeline limpios
+6. ✅ Fase 5: FundOrchestrator usa TrackingService singleton
+7. ⏳ Fase 6: Eliminar código obsoleto (ExecutionTracker, LoggingService, TraceService)
+
+### Correcciones Post-Refactorización (2025-12-30)
+
+**GAPs corregidos:**
+1. ✅ GAP-001: Descuadres (código 8) ahora se escriben a `sandbox.Alertas_Descuadre_Derivados`
+2. ✅ GAP-002: Suciedades (código 5) ahora se auditan en `sandbox.Alertas_Suciedades_IPA`
+   - SP `staging.IPA_04_TratamientoSuciedades_v2` modificado para retornar código 5
+3. ✅ GAP-003: Errores de proceso se registran en `sandbox.Fondos_Problema`
+
+**Nuevos métodos en TrackingService:**
+- `_escribirDescuadreSandbox()` - Escribe descuadres a sandbox (códigos 7-8)
+- `_parsearDetalleDescuadre()` - Parsea texto de descuadre a valores numéricos
+- `_escribirSuciedadSandbox()` - Escribe suciedades a sandbox (código 5)
+- `_parsearDetalleSuciedad()` - Parsea texto de suciedad a valores
+- `_registrarFondoProblema()` - Registra fondos con error en sandbox

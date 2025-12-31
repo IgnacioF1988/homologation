@@ -396,8 +396,6 @@ router.post('/', async (req, res) => {
   // esInstrumentoNuevo es solo frontend, no existe en BD
   delete data.esInstrumentoNuevo;
 
-  console.log('[POST /instrumentos] Datos recibidos (normalizados):', JSON.stringify(data, null, 2));
-
   if (!data.idInstrumento || !data.moneda) {
     return res.status(400).json({
       success: false,
@@ -525,8 +523,6 @@ router.post('/', async (req, res) => {
     }
 
     const query = `INSERT INTO stock.instrumentos (${insertFields.join(', ')}) VALUES (${insertValues.join(', ')})`;
-    console.log('[POST /instrumentos] Query:', query);
-
     await request.query(query);
 
     // Obtener el registro insertado
@@ -534,8 +530,6 @@ router.post('/', async (req, res) => {
       .input('id', sql.Int, parseInt(data.idInstrumento))
       .input('moneda', sql.Int, parseInt(data.moneda))
       .query('SELECT * FROM stock.instrumentos WHERE idInstrumento = @id AND moneda = @moneda');
-
-    console.log('[POST /instrumentos] Registro insertado:', inserted.recordset[0]);
 
     res.status(201).json({
       success: true,
@@ -555,8 +549,6 @@ router.put('/:id/:moneda', async (req, res) => {
   const { id, moneda } = req.params;
   // Normalizar nombres de campos
   const data = normalizeData(req.body);
-
-  console.log('[PUT /instrumentos] Datos recibidos (normalizados):', JSON.stringify(data, null, 2));
 
   try {
     const pool = await getPool();
@@ -642,8 +634,6 @@ router.put('/:id/:moneda', async (req, res) => {
     }
 
     const query = `UPDATE stock.instrumentos SET ${setClauses.join(', ')} WHERE idInstrumento = @id AND moneda = @moneda`;
-    console.log('[PUT /instrumentos] Query:', query);
-
     await request.query(query);
 
     // Obtener el registro actualizado

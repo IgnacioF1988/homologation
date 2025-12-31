@@ -59,3 +59,19 @@ Limpiar comentarios en backend: todo lo legacy fuera, actualizado con nuevo func
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Creo que es muy importante en este punto en paralelizar lo CAPM y PNL dentro de un mismo fondo (analizar bien cómo tendría que ser el flujo óptimo).
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Investigar si saca las columnas [ID]. Siento que interfieren con la sacada de duplicados.
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Investigar qué logs usan los sps de stagign y planear migracion exclusiva de control desde el backend
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Inestigas los endpoints sin uso. Además, que todo endpoint consuma datos desde un servicio, no con query directa. 
