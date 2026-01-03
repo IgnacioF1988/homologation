@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__sqlserver-moneda__list_procedures",
+      "mcp__sqlserver-moneda__get_sp_definition",
+      "mcp__sqlserver-moneda__describe_object",
+      "mcp__sqlserver-moneda__query",
+      "mcp__sqlserver-moneda__switch_database",
+      "mcp__sqlserver-moneda__execute",
+      "mcp__sqlserver-moneda__list_tables"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "chrome-devtools",
+    "playwright",
+    "exa",
+    "sqlserver-moneda",
+    "filesystem"
+  ]
+}
