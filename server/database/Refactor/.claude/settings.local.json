@@ -7,7 +7,12 @@
       "mcp__sqlserver-moneda__query",
       "mcp__sqlserver-moneda__switch_database",
       "mcp__sqlserver-moneda__execute",
-      "mcp__sqlserver-moneda__list_tables"
+      "mcp__sqlserver-moneda__list_tables",
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit:*)",
+      "mcp__sqlserver-moneda__list_views",
+      "Bash(git checkout:*)"
     ]
   },
   "enabledMcpjsonServers": [

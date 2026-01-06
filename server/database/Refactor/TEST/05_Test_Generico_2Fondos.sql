@@ -6,9 +6,18 @@ Descripcion: Script configurable para probar el pipeline con cualquier par de
              fondos. Solo modifica las variables en la seccion CONFIGURACION.
 
 Uso:
-  1. Actualiza las variables en CONFIGURACION
-  2. Ejecuta el script completo (F5)
-  3. Revisa los resultados al final
+  1. Actualiza las variables en CONFIGURACION (fondos, fechas, IDs)
+  2. Configura @LimpiezaCompleta segun el escenario de prueba:
+     - 0 = Re-ejecucion: solo limpia datos de los IDs especificados
+     - 1 = Ejecucion virgen: limpia TODAS las tablas de destino
+  3. Ejecuta el script completo (F5)
+  4. Revisa los resultados al final
+
+Tablas limpiadas en modo completo:
+  - sandbox.Homologacion_* (instrumentos, monedas, fondos + _Fondos)
+  - sandbox.Alertas_* (suciedades, extract, descuadres)
+  - logs.Validaciones_Ejecucion
+  - extract.* (IPA, CAPM, SONA, PNL, Derivados, PosModRF)
 
 Autor: Refactorizacion Pipeline IPA
 Fecha: 2026-01-06
@@ -33,6 +42,13 @@ DECLARE @ID_Fund_2 INT = 2;                         -- ID del fondo 2
 -- IDs de ejecucion (cambiar si hay conflicto)
 DECLARE @ID_Ejecucion_1 BIGINT = 501;
 DECLARE @ID_Ejecucion_2 BIGINT = 502;
+
+-- ============================================================================
+-- SWITCH DE LIMPIEZA
+-- ============================================================================
+-- 0 = Limpieza parcial: solo borra datos de @ID_Ejecucion_1 y @ID_Ejecucion_2
+-- 1 = Limpieza TOTAL: borra TODAS las tablas sandbox/logs/extract (escenario virgen)
+DECLARE @LimpiezaCompleta BIT = 0;
 
 -- ============================================================================
 -- NO MODIFICAR DEBAJO DE ESTA LINEA
@@ -99,16 +115,111 @@ PRINT '------------------------------------------------------------------------'
 PRINT ' PASO 1: Limpieza de datos previos'
 PRINT '------------------------------------------------------------------------'
 
-DELETE FROM extract.IPA WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM extract.CAPM WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM extract.SONA WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM extract.PNL WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM extract.Derivados WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM extract.PosModRF WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM logs.Validaciones_Ejecucion WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
-DELETE FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+IF @LimpiezaCompleta = 1
+BEGIN
+    PRINT '  [!] MODO LIMPIEZA COMPLETA - Escenario virgen'
+    PRINT ''
 
-PRINT '  [OK] Limpieza completada'
+    -- ══════════════════════════════════════════════════════════════════════
+    -- SANDBOX: Tablas N:M (primero las FK, luego las principales)
+    -- ══════════════════════════════════════════════════════════════════════
+    DELETE FROM sandbox.Homologacion_Instrumentos_Fondos;
+    PRINT '    - sandbox.Homologacion_Instrumentos_Fondos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Homologacion_Instrumentos;
+    PRINT '    - sandbox.Homologacion_Instrumentos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Homologacion_Monedas_Fondos;
+    PRINT '    - sandbox.Homologacion_Monedas_Fondos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Homologacion_Monedas;
+    PRINT '    - sandbox.Homologacion_Monedas: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Homologacion_Fondos_Fondos;
+    PRINT '    - sandbox.Homologacion_Fondos_Fondos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Homologacion_Fondos;
+    PRINT '    - sandbox.Homologacion_Fondos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Alertas_Suciedades_IPA_Fondos;
+    PRINT '    - sandbox.Alertas_Suciedades_IPA_Fondos: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Alertas_Suciedades_IPA;
+    PRINT '    - sandbox.Alertas_Suciedades_IPA: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    -- ══════════════════════════════════════════════════════════════════════
+    -- SANDBOX: Tablas de alertas simples
+    -- ══════════════════════════════════════════════════════════════════════
+    DELETE FROM sandbox.Alertas_Extract_Faltante;
+    PRINT '    - sandbox.Alertas_Extract_Faltante: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Alertas_Descuadre_Cash;
+    PRINT '    - sandbox.Alertas_Descuadre_Cash: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Alertas_Descuadre_Derivados;
+    PRINT '    - sandbox.Alertas_Descuadre_Derivados: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM sandbox.Alertas_Descuadre_NAV;
+    PRINT '    - sandbox.Alertas_Descuadre_NAV: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    -- ══════════════════════════════════════════════════════════════════════
+    -- LOGS
+    -- ══════════════════════════════════════════════════════════════════════
+    DELETE FROM logs.Validaciones_Ejecucion;
+    PRINT '    - logs.Validaciones_Ejecucion: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    -- ══════════════════════════════════════════════════════════════════════
+    -- EXTRACT
+    -- ══════════════════════════════════════════════════════════════════════
+    DELETE FROM extract.IPA;
+    PRINT '    - extract.IPA: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM extract.CAPM;
+    PRINT '    - extract.CAPM: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM extract.SONA;
+    PRINT '    - extract.SONA: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM extract.PNL;
+    PRINT '    - extract.PNL: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM extract.Derivados;
+    PRINT '    - extract.Derivados: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    DELETE FROM extract.PosModRF;
+    PRINT '    - extract.PosModRF: ' + CAST(@@ROWCOUNT AS NVARCHAR(10)) + ' filas';
+
+    PRINT ''
+    PRINT '  [OK] Limpieza COMPLETA terminada'
+END
+ELSE
+BEGIN
+    PRINT '  [i] MODO LIMPIEZA PARCIAL - Solo IDs de ejecucion ' +
+          CAST(@ID_Ejecucion_1 AS NVARCHAR(20)) + ', ' + CAST(@ID_Ejecucion_2 AS NVARCHAR(20))
+    PRINT ''
+
+    -- Extract tables
+    DELETE FROM extract.IPA WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM extract.CAPM WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM extract.SONA WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM extract.PNL WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM extract.Derivados WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM extract.PosModRF WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+
+    -- Logs
+    DELETE FROM logs.Validaciones_Ejecucion WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+
+    -- Sandbox alerts (by execution)
+    DELETE FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM sandbox.Alertas_Descuadre_Cash WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM sandbox.Alertas_Descuadre_Derivados WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+    DELETE FROM sandbox.Alertas_Descuadre_NAV WHERE ID_Ejecucion IN (@ID_Ejecucion_1, @ID_Ejecucion_2);
+
+    -- Nota: Las tablas N:M (Homologacion_*, Suciedades_*) son globales,
+    -- no se filtran por ID_Ejecucion. Use @LimpiezaCompleta = 1 para limpiarlas.
+
+    PRINT '  [OK] Limpieza parcial completada'
+END
 PRINT ''
 
 -- ============================================================================

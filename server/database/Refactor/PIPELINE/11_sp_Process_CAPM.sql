@@ -53,9 +53,13 @@ BEGIN
     DECLARE @SQL NVARCHAR(MAX);
     DECLARE @ReturnCode INT = 0;
     DECLARE @ErrorMessage NVARCHAR(500);
-    DECLARE @Source NVARCHAR(50) = 'CASH APPRAISAL';
+    DECLARE @Source NVARCHAR(50);
     DECLARE @Umbral DECIMAL(18,4);
     DECLARE @id_CURR_Fondo INT;
+
+    -- Obtener Source desde config (fuente de verdad)
+    SELECT @Source = SourceName FROM config.Extract_Source WHERE ExtractTable = 'CAPM';
+    SET @Source = ISNULL(@Source, 'GENEVA');  -- Fallback por seguridad
 
     -- Nombres de tablas temporales
     DECLARE @Suffix NVARCHAR(100) = CAST(@ID_Ejecucion AS NVARCHAR(20)) + '_' +

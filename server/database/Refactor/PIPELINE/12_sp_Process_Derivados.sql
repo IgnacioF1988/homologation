@@ -52,12 +52,16 @@ BEGIN
     DECLARE @SQL NVARCHAR(MAX);
     DECLARE @ReturnCode INT = 0;
     DECLARE @ErrorMessage NVARCHAR(500);
-    DECLARE @Source NVARCHAR(50) = 'DERIVADOS';
+    DECLARE @Source NVARCHAR(50);
     DECLARE @UmbralDescuadre DECIMAL(18,4);
     DECLARE @UmbralParidad DECIMAL(18,4);
     DECLARE @id_CURR_Fondo INT;
     DECLARE @Portfolio NVARCHAR(100);
     DECLARE @AjusteCreado BIT;
+
+    -- Obtener Source desde config (fuente de verdad)
+    SELECT @Source = SourceName FROM config.Extract_Source WHERE ExtractTable = 'Derivados';
+    SET @Source = ISNULL(@Source, 'DERIVADOS');  -- Fallback por seguridad
 
     -- IDs de instrumentos de ajuste
     DECLARE @ID_Instrumento_Ajuste INT = 1507;
