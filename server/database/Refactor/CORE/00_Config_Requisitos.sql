@@ -378,15 +378,27 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Desactivar umbrales anteriores para este fondo
+    -- Usar MERGE para evitar conflictos con UNIQUE constraint (ID_Fund, FechaVigencia)
+    MERGE config.Umbrales_Suciedades AS target
+    USING (SELECT @ID_Fund AS ID_Fund, CAST(GETDATE() AS DATE) AS FechaVigencia) AS source
+    ON (target.ID_Fund = source.ID_Fund OR (target.ID_Fund IS NULL AND source.ID_Fund IS NULL))
+       AND target.FechaVigencia = source.FechaVigencia
+    WHEN MATCHED THEN
+        UPDATE SET
+            Umbral = @Umbral,
+            Descripcion = COALESCE(@Descripcion, target.Descripcion),
+            Activo = 1,
+            ModificadoPor = SYSTEM_USER
+    WHEN NOT MATCHED THEN
+        INSERT (ID_Fund, Umbral, Descripcion, FechaVigencia, Activo)
+        VALUES (@ID_Fund, @Umbral, @Descripcion, CAST(GETDATE() AS DATE), 1);
+
+    -- Desactivar umbrales anteriores (otras fechas) para este fondo
     UPDATE config.Umbrales_Suciedades
     SET Activo = 0
     WHERE (ID_Fund = @ID_Fund OR (ID_Fund IS NULL AND @ID_Fund IS NULL))
+      AND FechaVigencia < CAST(GETDATE() AS DATE)
       AND Activo = 1;
-
-    -- Insertar nuevo umbral
-    INSERT INTO config.Umbrales_Suciedades (ID_Fund, Umbral, Descripcion, FechaVigencia)
-    VALUES (@ID_Fund, @Umbral, @Descripcion, GETDATE());
 
     IF @ID_Fund IS NULL
         PRINT 'Umbral GLOBAL de suciedades actualizado a ' + CAST(@Umbral AS NVARCHAR(20));
