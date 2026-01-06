@@ -443,6 +443,42 @@ EXEC config.sp_SetUmbralSuciedad @ID_Fund = 2, @Umbral = 0.001,
      @Descripcion = 'Fondo con alta precision requerida';
 */
 
+-- ============================================================================
+-- VISTA: vw_Umbrales_Ajuste_Activos
+-- ============================================================================
+-- Muestra los umbrales de ajuste activos por fuente y fondo
+-- ============================================================================
+IF OBJECT_ID('config.vw_Umbrales_Ajuste_Activos', 'V') IS NOT NULL
+    DROP VIEW config.vw_Umbrales_Ajuste_Activos;
+GO
+
+CREATE VIEW [config].[vw_Umbrales_Ajuste_Activos]
+AS
+SELECT
+    u.ID,
+    u.Fuente,
+    u.ID_Fund,
+    COALESCE(f.Fund_Code, '** GLOBAL **') AS Fund_Code,
+    u.Umbral,
+    u.FechaVigencia,
+    u.FechaCreacion
+FROM config.Umbrales_Ajuste u
+LEFT JOIN dimensionales.BD_Funds f ON u.ID_Fund = f.ID_Fund
+WHERE u.Activo = 1;
+GO
+
+/*
+-- ============================================================================
+-- EJEMPLOS DE USO - Umbrales_Ajuste
+-- ============================================================================
+
+-- Ver todos los umbrales de ajuste activos:
+SELECT * FROM config.vw_Umbrales_Ajuste_Activos ORDER BY Fuente, ID_Fund;
+
+-- Ver umbral para CAPM del fondo 20:
+SELECT config.fn_GetUmbralAjuste('CAPM', 20) AS UmbralCAPM_Fondo20;
+*/
+
 PRINT '========================================';
 PRINT 'CONFIGURACION DE REQUISITOS - COMPLETADO';
 PRINT '========================================';
