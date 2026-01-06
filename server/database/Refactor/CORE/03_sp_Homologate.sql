@@ -2,29 +2,25 @@
 ================================================================================
 SP: staging.sp_Homologate
 ================================================================================
-██████╗ ███████╗██████╗ ██████╗ ███████╗ ██████╗ █████╗ ████████╗███████╗██████╗
-██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗╚══██╔══╝██╔════╝██╔══██╗
-██║  ██║█████╗  ██████╔╝██████╔╝█████╗  ██║     ███████║   ██║   █████╗  ██║  ██║
-██║  ██║██╔══╝  ██╔═══╝ ██╔══██╗██╔══╝  ██║     ██╔══██║   ██║   ██╔══╝  ██║  ██║
-██████╔╝███████╗██║     ██║  ██║███████╗╚██████╗██║  ██║   ██║   ███████╗██████╔╝
-╚═════╝ ╚══════╝╚═╝     ╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝
+NOTA: Este SP tiene dos funciones:
+
+1. HOMOLOGACIÓN DE TEMP TABLES (##*_Work) - ACTIVO Y NECESARIO
+   - Actualiza ID_Fund, ID_Instrumento, id_CURR en tablas temporales
+   - Usado por sp_Process_IPA, sp_Process_CAPM, sp_Process_Derivados, sp_Process_PNL
+
+2. REGISTRO EN SANDBOX - OBSOLETO (usa estructura antigua)
+   - Los INSERTs a sandbox.Homologacion_* usan ID_Ejecucion/FechaReporte
+   - La estructura actual es N:M global (sin estos campos)
+   - sp_ValidateFund v6.9+ ya maneja esto correctamente ANTES de llamar al pipeline
+
+IMPORTANTE: Este SP DEBE existir para que el pipeline funcione.
+            Los INSERTs a sandbox probablemente no se ejecutan si sp_ValidateFund
+            ya detectó y registró los problemas de homologación.
+
+Fecha revisión: 2026-01-06
 ================================================================================
 
-¡¡¡ ESTE SP ESTÁ OBSOLETO - NO USAR !!!
-
-Razón: Usa la estructura ANTIGUA de sandbox (con ID_Ejecucion, FechaReporte).
-       Las tablas sandbox actuales usan arquitectura N:M GLOBAL sin estos campos.
-
-Reemplazo: La homologación está integrada directamente en sp_ValidateFund v6.9+
-           que usa MERGE con la estructura N:M correcta.
-
-Mantener este archivo solo como referencia histórica.
-No ejecutar en producción.
-
-Fecha deprecación: 2026-01-06
-================================================================================
-
-Descripción ORIGINAL (obsoleta):
+Descripción:
   Homologación universal de datos.
   Actualiza tabla temporal con IDs homologados de dimensionales.
 
