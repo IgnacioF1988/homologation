@@ -287,6 +287,162 @@ SELECT * FROM config.vw_Requisitos_Extract_Completo ORDER BY ID_Fund;
 SELECT * FROM config.vw_Requisitos_Extract_Completo WHERE Req_Derivados = 1;
 */
 
+-- ============================================================================
+-- TABLA: config.Umbrales_Suciedades
+-- Define umbrales para deteccion de suciedades por fondo
+-- Analogo a config.Umbrales_Ajuste
+-- ============================================================================
+IF NOT EXISTS (SELECT 1 FROM sys.tables t
+               INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+               WHERE s.name = 'config' AND t.name = 'Umbrales_Suciedades')
+BEGIN
+    CREATE TABLE [config].[Umbrales_Suciedades] (
+        ID INT IDENTITY(1,1) PRIMARY KEY,
+        ID_Fund INT NULL,                    -- NULL = aplica a todos los fondos (global)
+        Umbral DECIMAL(18,6) NOT NULL DEFAULT 0.01,  -- Valor por defecto: 0.01
+        Descripcion NVARCHAR(200) NULL,
+        FechaVigencia DATE NOT NULL DEFAULT GETDATE(),
+        Activo BIT NOT NULL DEFAULT 1,
+        FechaCreacion DATETIME NOT NULL DEFAULT GETDATE(),
+        ModificadoPor NVARCHAR(100) DEFAULT SYSTEM_USER,
+
+        -- Constraint: solo un umbral activo por fondo por fecha
+        CONSTRAINT UQ_Umbral_Suciedades_Fund UNIQUE (ID_Fund, FechaVigencia)
+    );
+
+    -- Insertar umbral global por defecto
+    INSERT INTO [config].[Umbrales_Suciedades] (ID_Fund, Umbral, Descripcion)
+    VALUES (NULL, 0.01, 'Umbral global por defecto - Posiciones con |Qty| < 0.01 se consideran sucias');
+
+    PRINT 'Tabla [config].[Umbrales_Suciedades] creada con umbral global 0.01';
+END
+GO
+
+-- ============================================================================
+-- FUNCION: fn_GetUmbralSuciedad
+-- Obtiene el umbral de suciedad para un fondo (o global si no tiene especifico)
+-- ============================================================================
+IF OBJECT_ID('config.fn_GetUmbralSuciedad', 'FN') IS NOT NULL
+    DROP FUNCTION config.fn_GetUmbralSuciedad;
+GO
+
+CREATE FUNCTION [config].[fn_GetUmbralSuciedad]
+(
+    @ID_Fund INT
+)
+RETURNS DECIMAL(18,6)
+AS
+BEGIN
+    DECLARE @Umbral DECIMAL(18,6);
+
+    -- Buscar umbral especifico para el fondo (activo y vigente)
+    SELECT TOP 1 @Umbral = Umbral
+    FROM config.Umbrales_Suciedades
+    WHERE ID_Fund = @ID_Fund
+      AND Activo = 1
+      AND FechaVigencia <= GETDATE()
+    ORDER BY FechaVigencia DESC;
+
+    -- Si no hay especifico, buscar global (ID_Fund = NULL)
+    IF @Umbral IS NULL
+    BEGIN
+        SELECT TOP 1 @Umbral = Umbral
+        FROM config.Umbrales_Suciedades
+        WHERE ID_Fund IS NULL
+          AND Activo = 1
+          AND FechaVigencia <= GETDATE()
+        ORDER BY FechaVigencia DESC;
+    END
+
+    -- Default hardcodeado si no hay nada configurado
+    IF @Umbral IS NULL
+        SET @Umbral = 0.01;
+
+    RETURN @Umbral;
+END
+GO
+
+-- ============================================================================
+-- PROCEDURE: sp_SetUmbralSuciedad
+-- Configura el umbral de suciedad para un fondo
+-- ============================================================================
+IF OBJECT_ID('config.sp_SetUmbralSuciedad', 'P') IS NOT NULL
+    DROP PROCEDURE config.sp_SetUmbralSuciedad;
+GO
+
+CREATE PROCEDURE [config].[sp_SetUmbralSuciedad]
+    @ID_Fund INT = NULL,          -- NULL para umbral global
+    @Umbral DECIMAL(18,6),
+    @Descripcion NVARCHAR(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Desactivar umbrales anteriores para este fondo
+    UPDATE config.Umbrales_Suciedades
+    SET Activo = 0
+    WHERE (ID_Fund = @ID_Fund OR (ID_Fund IS NULL AND @ID_Fund IS NULL))
+      AND Activo = 1;
+
+    -- Insertar nuevo umbral
+    INSERT INTO config.Umbrales_Suciedades (ID_Fund, Umbral, Descripcion, FechaVigencia)
+    VALUES (@ID_Fund, @Umbral, @Descripcion, GETDATE());
+
+    IF @ID_Fund IS NULL
+        PRINT 'Umbral GLOBAL de suciedades actualizado a ' + CAST(@Umbral AS NVARCHAR(20));
+    ELSE
+        PRINT 'Umbral de suciedades para fondo ' + CAST(@ID_Fund AS NVARCHAR(10)) + ' actualizado a ' + CAST(@Umbral AS NVARCHAR(20));
+END
+GO
+
+-- ============================================================================
+-- VISTA: vw_Umbrales_Suciedades_Activos
+-- Muestra los umbrales activos por fondo
+-- ============================================================================
+IF OBJECT_ID('config.vw_Umbrales_Suciedades_Activos', 'V') IS NOT NULL
+    DROP VIEW config.vw_Umbrales_Suciedades_Activos;
+GO
+
+CREATE VIEW [config].[vw_Umbrales_Suciedades_Activos]
+AS
+SELECT
+    u.ID,
+    u.ID_Fund,
+    COALESCE(f.Fund_Code, '** GLOBAL **') AS Fund_Code,
+    u.Umbral,
+    u.Descripcion,
+    u.FechaVigencia,
+    u.FechaCreacion,
+    u.ModificadoPor
+FROM config.Umbrales_Suciedades u
+LEFT JOIN dimensionales.BD_Funds f ON u.ID_Fund = f.ID_Fund
+WHERE u.Activo = 1;
+GO
+
+/*
+-- ============================================================================
+-- EJEMPLOS DE USO
+-- ============================================================================
+
+-- Ver umbral actual para un fondo:
+SELECT config.fn_GetUmbralSuciedad(20) AS UmbralFondo20;
+
+-- Ver todos los umbrales activos:
+SELECT * FROM config.vw_Umbrales_Suciedades_Activos;
+
+-- Cambiar umbral global a 0.005:
+EXEC config.sp_SetUmbralSuciedad @Umbral = 0.005,
+     @Descripcion = 'Umbral mas estricto';
+
+-- Configurar umbral especifico para fondo 60 (mas permisivo):
+EXEC config.sp_SetUmbralSuciedad @ID_Fund = 60, @Umbral = 0.1,
+     @Descripcion = 'Fondo con posiciones pequenas permitidas';
+
+-- Configurar umbral especifico para fondo 2 (mas estricto):
+EXEC config.sp_SetUmbralSuciedad @ID_Fund = 2, @Umbral = 0.001,
+     @Descripcion = 'Fondo con alta precision requerida';
+*/
+
 PRINT '========================================';
 PRINT 'CONFIGURACION DE REQUISITOS - COMPLETADO';
 PRINT '========================================';

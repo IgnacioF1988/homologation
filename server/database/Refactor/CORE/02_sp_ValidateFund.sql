@@ -4,10 +4,15 @@ GO
 /*
 ================================================================================
 SP: staging.sp_ValidateFund
-Version: v6.7 - RECOMPILE optimization (indices-based)
+Version: v6.8 - Umbral de suciedad configurable
 
 Descripcion: Ejecuta TODAS las validaciones y registra TODOS los problemas
              en sandbox (estructura N:M) y en logs.Validaciones_Ejecucion.
+
+Cambios v6.8:
+  - CONFIG: Umbral de suciedad ahora usa config.fn_GetUmbralSuciedad(@ID_Fund)
+            Permite configurar umbrales por fondo via config.Umbrales_Suciedades
+  - REQUISITO: Ejecutar 00_Config_Requisitos.sql para crear tabla y funcion
 
 Cambios v6.7:
   - PERF: Cambiado de MIN_GRANT_PERCENT/MAX_GRANT_PERCENT a RECOMPILE
@@ -95,7 +100,7 @@ BEGIN
     SET @HomolMonedasCount = 0;
 
     DECLARE @MostCriticalCode INT = 0;
-    DECLARE @UmbralSuciedad DECIMAL(18,4) = 0.01;
+    DECLARE @UmbralSuciedad DECIMAL(18,6) = config.fn_GetUmbralSuciedad(@ID_Fund);  -- v6.8: Configurable por fondo
     DECLARE @ErrorMessages NVARCHAR(MAX) = '';
     DECLARE @ErrorCount INT = 0;
     DECLARE @RegistrosPosModRF INT = 0;
@@ -110,10 +115,11 @@ BEGIN
     DECLARE @SourceDerivados NVARCHAR(50);
 
     PRINT '════════════════════════════════════════════════════════════════';
-    PRINT 'sp_ValidateFund v6.7: INICIO (Global Sandbox N:M + RECOMPILE)';
+    PRINT 'sp_ValidateFund v6.8: INICIO (Umbral configurable)';
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
     PRINT 'FechaReporte: ' + CONVERT(NVARCHAR(10), @FechaReporte, 120);
+    PRINT 'UmbralSuciedad: ' + CAST(@UmbralSuciedad AS NVARCHAR(20));
     PRINT '════════════════════════════════════════════════════════════════';
 
     BEGIN TRY
