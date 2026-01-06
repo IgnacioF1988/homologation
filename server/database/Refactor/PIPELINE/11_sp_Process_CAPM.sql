@@ -243,15 +243,22 @@ BEGIN
             -- Diferencia excede umbral → Stand-by
             PRINT 'ERROR: Descuadre CAPM excede umbral (' + CAST(@Umbral AS NVARCHAR(10)) + ')';
 
-            -- Registrar alerta
-            INSERT INTO sandbox.Alertas_Descuadre_Cash (
-                ID_Ejecucion, ID_Fund, FechaReporte, Portfolio,
-                Total_IPA_Cash, Total_CAPM, Diferencia, UmbralAplicado, FechaProceso
-            )
-            VALUES (
-                @ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio,
-                @TotalIPA_Cash, @TotalCAPM, @Diferencia, @Umbral, GETDATE()
-            );
+            -- Registrar alerta usando MERGE (evita duplicados en re-ejecuciones)
+            MERGE sandbox.Alertas_Descuadre_Cash AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion
+               AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte
+            WHEN MATCHED THEN
+                UPDATE SET
+                    Total_IPA_Cash = @TotalIPA_Cash,
+                    Total_CAPM = @TotalCAPM,
+                    Diferencia = @Diferencia,
+                    UmbralAplicado = @Umbral,
+                    FechaProceso = GETDATE()
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, Portfolio, Total_IPA_Cash, Total_CAPM, Diferencia, UmbralAplicado, FechaProceso)
+                VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio, @TotalIPA_Cash, @TotalCAPM, @Diferencia, @Umbral, GETDATE());
 
             SET @ErrorCount = 1;
             RETURN 7;  -- DESCUADRES_CAPM

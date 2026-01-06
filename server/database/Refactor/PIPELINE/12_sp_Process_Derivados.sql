@@ -304,14 +304,22 @@ BEGIN
             -- Descuadre excede umbral → Stand-by
             PRINT 'ERROR: Descuadre Derivados excede umbral (' + CAST(@UmbralDescuadre AS NVARCHAR(10)) + ')';
 
-            INSERT INTO sandbox.Alertas_Descuadre_Derivados (
-                ID_Ejecucion, ID_Fund, FechaReporte, Portfolio,
-                MVBook_IPA, MTM_Derivados, Diferencia, UmbralAplicado, FechaProceso
-            )
-            VALUES (
-                @ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio,
-                @TotalIPA_MTM, @TotalDerivados_MTM, @DiferenciaDescuadre, @UmbralDescuadre, GETDATE()
-            );
+            -- MERGE para evitar duplicados en re-ejecuciones
+            MERGE sandbox.Alertas_Descuadre_Derivados AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion
+               AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte
+            WHEN MATCHED THEN
+                UPDATE SET
+                    MVBook_IPA = @TotalIPA_MTM,
+                    MTM_Derivados = @TotalDerivados_MTM,
+                    Diferencia = @DiferenciaDescuadre,
+                    UmbralAplicado = @UmbralDescuadre,
+                    FechaProceso = GETDATE()
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, Portfolio, MVBook_IPA, MTM_Derivados, Diferencia, UmbralAplicado, FechaProceso)
+                VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio, @TotalIPA_MTM, @TotalDerivados_MTM, @DiferenciaDescuadre, @UmbralDescuadre, GETDATE());
 
             SET @ErrorCount = 1;
             RETURN 8;  -- DESCUADRES_DERIVADOS

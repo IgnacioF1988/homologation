@@ -4,10 +4,16 @@ GO
 /*
 ================================================================================
 SP: staging.sp_ValidateFund
-Version: v6.8 - Umbral de suciedad configurable
+Version: v6.9 - Fix duplicados en re-ejecuciones
 
 Descripcion: Ejecuta TODAS las validaciones y registra TODOS los problemas
              en sandbox (estructura N:M) y en logs.Validaciones_Ejecucion.
+
+Cambios v6.9:
+  - FIX: Cambiar INSERT a MERGE en sandbox.Alertas_Extract_Faltante
+         para evitar fallas por UNIQUE constraint en re-ejecuciones
+  - FIX: Cambiar INSERT a MERGE en tablas *_Fondos (N:M) para evitar
+         race conditions en procesamiento paralelo
 
 Cambios v6.8:
   - CONFIG: Umbral de suciedad ahora usa config.fn_GetUmbralSuciedad(@ID_Fund)
@@ -115,7 +121,7 @@ BEGIN
     DECLARE @SourceDerivados NVARCHAR(50);
 
     PRINT '════════════════════════════════════════════════════════════════';
-    PRINT 'sp_ValidateFund v6.8: INICIO (Umbral configurable)';
+    PRINT 'sp_ValidateFund v6.9: INICIO (Fix duplicados)';
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
     PRINT 'FechaReporte: ' + CONVERT(NVARCHAR(10), @FechaReporte, 120);
@@ -180,8 +186,14 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'IPA_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 13;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'IPA', 1);
+            -- MERGE para evitar duplicados en re-ejecuciones (v6.9)
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'IPA' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -203,8 +215,13 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'CAPM_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 14;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'CAPM', 1);
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'CAPM' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -226,8 +243,13 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'SONA_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 15;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'SONA', 1);
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'SONA' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -249,8 +271,13 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'PNL_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 16;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'PNL', 1);
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'PNL' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -272,8 +299,13 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'DERIVADOS_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 17;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'Derivados', 1);
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'Derivados' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -295,8 +327,13 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'POSMODRF_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 18;
 
-            INSERT INTO sandbox.Alertas_Extract_Faltante (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
-            VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, 'PosModRF', 1);
+            MERGE sandbox.Alertas_Extract_Faltante AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'PosModRF' AS TipoReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte AND target.TipoReporte = source.TipoReporte
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, TipoReporte, Obligatorio)
+                VALUES (source.ID_Ejecucion, source.ID_Fund, source.FechaReporte, source.TipoReporte, 1);
 
             INSERT INTO logs.Validaciones_Ejecucion
                 (ID_Ejecucion, ID_Proceso, ID_Fund, FechaReporte, CodigoValidacion, TipoValidacion, Categoria, Mensaje, Cantidad, EsCritico)
@@ -353,16 +390,18 @@ BEGIN
             INSERT (NombreFondo, Source, FechaDeteccion, Estado)
             VALUES (source.NombreFondo, source.Source, GETDATE(), 'Pendiente');
 
-        -- Insertar relacion con fondo (solo si no existe)
-        INSERT INTO sandbox.Homologacion_Fondos_Fondos (ID_Homologacion, ID_Fund)
-        SELECT DISTINCT h.ID, @ID_Fund
-        FROM sandbox.Homologacion_Fondos h
-        INNER JOIN #FondosSinHomologar f ON h.NombreFondo = f.NombreFondo AND h.Source = f.Source
-        WHERE h.Estado = 'Pendiente'
-          AND NOT EXISTS (
-              SELECT 1 FROM sandbox.Homologacion_Fondos_Fondos hf
-              WHERE hf.ID_Homologacion = h.ID AND hf.ID_Fund = @ID_Fund
-          );
+        -- Insertar relacion con fondo usando MERGE (evita race condition en paralelo) v6.9
+        MERGE sandbox.Homologacion_Fondos_Fondos AS target
+        USING (
+            SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
+            FROM sandbox.Homologacion_Fondos h
+            INNER JOIN #FondosSinHomologar f ON h.NombreFondo = f.NombreFondo AND h.Source = f.Source
+            WHERE h.Estado = 'Pendiente'
+        ) AS source
+        ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
+        WHEN NOT MATCHED THEN
+            INSERT (ID_Homologacion, ID_Fund)
+            VALUES (source.ID_Homologacion, source.ID_Fund);
 
         -- Contar PENDIENTES para este fondo especificamente
         SELECT @HomolFondosCount = COUNT(*)
@@ -438,19 +477,21 @@ BEGIN
                     INSERT (InvestID, InvestDescription, Qty, MVBook, AI, FechaDeteccion, Estado)
                     VALUES (source.InvestID, source.InvestDescription, source.Qty, source.MVBook, source.AI, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo (solo si no existe)
-                INSERT INTO sandbox.Alertas_Suciedades_IPA_Fondos (ID_Suciedad, ID_Fund)
-                SELECT DISTINCT s.ID, @ID_Fund
-                FROM sandbox.Alertas_Suciedades_IPA s
-                INNER JOIN #SuciedadesDetectadas d
-                    ON s.InvestID = d.InvestID
-                    AND s.Qty = d.Qty
-                    AND s.MVBook = d.MVBook
-                WHERE s.Estado = 'Pendiente'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM sandbox.Alertas_Suciedades_IPA_Fondos sf
-                      WHERE sf.ID_Suciedad = s.ID AND sf.ID_Fund = @ID_Fund
-                  );
+                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
+                MERGE sandbox.Alertas_Suciedades_IPA_Fondos AS target
+                USING (
+                    SELECT DISTINCT s.ID AS ID_Suciedad, @ID_Fund AS ID_Fund
+                    FROM sandbox.Alertas_Suciedades_IPA s
+                    INNER JOIN #SuciedadesDetectadas d
+                        ON s.InvestID = d.InvestID
+                        AND s.Qty = d.Qty
+                        AND s.MVBook = d.MVBook
+                    WHERE s.Estado = 'Pendiente'
+                ) AS source
+                ON target.ID_Suciedad = source.ID_Suciedad AND target.ID_Fund = source.ID_Fund
+                WHEN NOT MATCHED THEN
+                    INSERT (ID_Suciedad, ID_Fund)
+                    VALUES (source.ID_Suciedad, source.ID_Fund);
 
                 -- Contar PENDIENTES para este fondo
                 SELECT @SuciedadesCount = COUNT(*)
@@ -566,16 +607,18 @@ BEGIN
                     INSERT (Instrumento, Source, Currency, FechaDeteccion, Estado)
                     VALUES (source.Instrumento, source.Source, source.Currency, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo (solo si no existe)
-                INSERT INTO sandbox.Homologacion_Instrumentos_Fondos (ID_Homologacion, ID_Fund)
-                SELECT DISTINCT h.ID, @ID_Fund
-                FROM sandbox.Homologacion_Instrumentos h
-                INNER JOIN #InstrumentosSinHomologar i ON h.Instrumento = i.Instrumento AND h.Source = i.Source
-                WHERE h.Estado = 'Pendiente'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM sandbox.Homologacion_Instrumentos_Fondos hf
-                      WHERE hf.ID_Homologacion = h.ID AND hf.ID_Fund = @ID_Fund
-                  );
+                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
+                MERGE sandbox.Homologacion_Instrumentos_Fondos AS target
+                USING (
+                    SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
+                    FROM sandbox.Homologacion_Instrumentos h
+                    INNER JOIN #InstrumentosSinHomologar i ON h.Instrumento = i.Instrumento AND h.Source = i.Source
+                    WHERE h.Estado = 'Pendiente'
+                ) AS source
+                ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
+                WHEN NOT MATCHED THEN
+                    INSERT (ID_Homologacion, ID_Fund)
+                    VALUES (source.ID_Homologacion, source.ID_Fund);
 
                 -- Contar PENDIENTES para este fondo
                 SELECT @HomolInstrumentosCount = COUNT(*)
@@ -687,16 +730,18 @@ BEGIN
                     INSERT (Moneda, Source, FechaDeteccion, Estado)
                     VALUES (source.Moneda, source.Source, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo (solo si no existe)
-                INSERT INTO sandbox.Homologacion_Monedas_Fondos (ID_Homologacion, ID_Fund)
-                SELECT DISTINCT h.ID, @ID_Fund
-                FROM sandbox.Homologacion_Monedas h
-                INNER JOIN #MonedasSinHomologar m ON h.Moneda = m.Moneda AND h.Source = m.Source
-                WHERE h.Estado = 'Pendiente'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM sandbox.Homologacion_Monedas_Fondos hf
-                      WHERE hf.ID_Homologacion = h.ID AND hf.ID_Fund = @ID_Fund
-                  );
+                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
+                MERGE sandbox.Homologacion_Monedas_Fondos AS target
+                USING (
+                    SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
+                    FROM sandbox.Homologacion_Monedas h
+                    INNER JOIN #MonedasSinHomologar m ON h.Moneda = m.Moneda AND h.Source = m.Source
+                    WHERE h.Estado = 'Pendiente'
+                ) AS source
+                ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
+                WHEN NOT MATCHED THEN
+                    INSERT (ID_Homologacion, ID_Fund)
+                    VALUES (source.ID_Homologacion, source.ID_Fund);
 
                 -- Contar PENDIENTES para este fondo
                 SELECT @HomolMonedasCount = COUNT(*)

@@ -202,14 +202,22 @@ BEGIN
             -- Diferencia excede umbral → Stand-by
             PRINT 'ERROR: Descuadre NAV excede umbral (' + CAST(@Umbral AS NVARCHAR(10)) + ')';
 
-            INSERT INTO sandbox.Alertas_Descuadre_NAV (
-                ID_Ejecucion, ID_Fund, FechaReporte, Portfolio,
-                Total_IPA, Total_SONA, Diferencia, UmbralAplicado, FechaProceso
-            )
-            VALUES (
-                @ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio,
-                @TotalCalculado, @TotalSONA, @Diferencia, @Umbral, GETDATE()
-            );
+            -- MERGE para evitar duplicados en re-ejecuciones
+            MERGE sandbox.Alertas_Descuadre_NAV AS target
+            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte) AS source
+            ON target.ID_Ejecucion = source.ID_Ejecucion
+               AND target.ID_Fund = source.ID_Fund
+               AND target.FechaReporte = source.FechaReporte
+            WHEN MATCHED THEN
+                UPDATE SET
+                    Total_IPA = @TotalCalculado,
+                    Total_SONA = @TotalSONA,
+                    Diferencia = @Diferencia,
+                    UmbralAplicado = @Umbral,
+                    FechaProceso = GETDATE()
+            WHEN NOT MATCHED THEN
+                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, Portfolio, Total_IPA, Total_SONA, Diferencia, UmbralAplicado, FechaProceso)
+                VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio, @TotalCalculado, @TotalSONA, @Diferencia, @Umbral, GETDATE());
 
             SET @ErrorCount = 1;
             RETURN 9;  -- DESCUADRES_NAV

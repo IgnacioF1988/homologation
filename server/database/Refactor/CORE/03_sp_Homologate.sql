@@ -1,8 +1,32 @@
 /*
 ================================================================================
 SP: staging.sp_Homologate
-Descripción: Homologación universal de datos.
-             Actualiza tabla temporal con IDs homologados de dimensionales.
+================================================================================
+██████╗ ███████╗██████╗ ██████╗ ███████╗ ██████╗ █████╗ ████████╗███████╗██████╗
+██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗╚══██╔══╝██╔════╝██╔══██╗
+██║  ██║█████╗  ██████╔╝██████╔╝█████╗  ██║     ███████║   ██║   █████╗  ██║  ██║
+██║  ██║██╔══╝  ██╔═══╝ ██╔══██╗██╔══╝  ██║     ██╔══██║   ██║   ██╔══╝  ██║  ██║
+██████╔╝███████╗██║     ██║  ██║███████╗╚██████╗██║  ██║   ██║   ███████╗██████╔╝
+╚═════╝ ╚══════╝╚═╝     ╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝
+================================================================================
+
+¡¡¡ ESTE SP ESTÁ OBSOLETO - NO USAR !!!
+
+Razón: Usa la estructura ANTIGUA de sandbox (con ID_Ejecucion, FechaReporte).
+       Las tablas sandbox actuales usan arquitectura N:M GLOBAL sin estos campos.
+
+Reemplazo: La homologación está integrada directamente en sp_ValidateFund v6.9+
+           que usa MERGE con la estructura N:M correcta.
+
+Mantener este archivo solo como referencia histórica.
+No ejecutar en producción.
+
+Fecha deprecación: 2026-01-06
+================================================================================
+
+Descripción ORIGINAL (obsoleta):
+  Homologación universal de datos.
+  Actualiza tabla temporal con IDs homologados de dimensionales.
 
 Parámetros:
   @TempTableName - Nombre de la tabla temporal a homologar (##XXX_Work_X_Y_Z)
