@@ -24,11 +24,11 @@ Fecha: 2026-01-02
 */
 
 CREATE OR ALTER PROCEDURE [extract].[Extract_Derivados]
-    @FechaReporte NVARCHAR(10),
+    @FechaReporte DATE,                -- DATE para consistencia con otros Extract SPs
     @ID_Proceso BIGINT,
     @ID_Ejecucion BIGINT,
     @ID_Fund INT,
-    @Portfolio NVARCHAR(100)
+    @Portfolio VARCHAR(50)             -- VARCHAR para evitar conversiones
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -40,14 +40,16 @@ BEGIN
     DECLARE @RowsTransformed INT = 0;
     DECLARE @StartTime DATETIME = GETDATE();
     DECLARE @ErrorMessage NVARCHAR(4000);
-    DECLARE @PortfolioNormalizado NVARCHAR(100);
-    DECLARE @PortfolioSource NVARCHAR(100);
+    DECLARE @PortfolioNormalizado VARCHAR(100);
+    DECLARE @PortfolioSource VARCHAR(100);
     DECLARE @ExisteEnIPA INT = 0;
     DECLARE @ReturnCode INT;
+    -- FechaReporte como VARCHAR para comparar con TBL_DERIVADOS_INTELIGENCIA (varchar)
+    DECLARE @FechaReporteStr VARCHAR(10) = CONVERT(VARCHAR(10), @FechaReporte, 120);
 
     PRINT '========================================';
     PRINT 'EXTRACT_DERIVADOS - INICIO (v2 - Per-Fund)';
-    PRINT 'Fecha: ' + ISNULL(@FechaReporte, 'NULL');
+    PRINT 'Fecha: ' + @FechaReporteStr;
     PRINT 'ID_Proceso: ' + CAST(@ID_Proceso AS NVARCHAR(20));
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
@@ -71,9 +73,10 @@ BEGIN
         SET @PortfolioSource = extract.fn_GetDerivadosPortfolio(@Portfolio);
 
         -- Verificar datos en origen (buscar en multiples variantes del portfolio)
+        -- Usar @FechaReporteStr porque TBL_DERIVADOS_INTELIGENCIA.FechaReporte es VARCHAR
         SELECT @SourceRows = COUNT(*)
         FROM [Inteligencia_Producto].[dbo].[TBL_DERIVADOS_INTELIGENCIA] WITH (NOLOCK)
-        WHERE FechaReporte = @FechaReporte
+        WHERE FechaReporte = @FechaReporteStr
           AND Portfolio IN (@PortfolioSource, @Portfolio, @PortfolioNormalizado);
 
         PRINT 'VALIDACION: Registros encontrados para ' + @Portfolio + ' = ' + CAST(@SourceRows AS NVARCHAR(10));
@@ -107,13 +110,15 @@ BEGIN
         BEGIN TRANSACTION;
 
         -- Tabla temporal para transformaciones
+        -- Usar temp table mejora estimacion de cardinalidad vs CTE
         DROP TABLE IF EXISTS #TempDerivados;
 
         SELECT *
         INTO #TempDerivados
         FROM [Inteligencia_Producto].[dbo].[TBL_DERIVADOS_INTELIGENCIA] WITH (NOLOCK)
-        WHERE FechaReporte = @FechaReporte
-          AND Portfolio IN (@PortfolioSource, @Portfolio, @PortfolioNormalizado);
+        WHERE FechaReporte = @FechaReporteStr
+          AND Portfolio IN (@PortfolioSource, @Portfolio, @PortfolioNormalizado)
+        OPTION (RECOMPILE);
 
         -- Transformacion: normalizar portfolio
         UPDATE #TempDerivados

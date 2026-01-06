@@ -2,7 +2,7 @@
 ================================================================================
 SP: extract.Extract_CAPM
 Descripcion: Extrae datos CAPM (Cash Appraisal por Moneda) para un fondo.
-             Version Per-Fund v2 con soporte para ejecucion paralela.
+             Version v4 - TempTable Stats para cardinalidad exacta.
 
 Fuente: GD_EG_001.dbo.GD_R_Cash_Appraisal_Moneda
 
@@ -18,17 +18,25 @@ Codigos de retorno:
   1  = WARNING (sin datos, pero OK)
   3  = ERROR_CRITICO
 
+Optimizaciones v4:
+  - Temp table #CAPM_Stage para estadisticas exactas
+  - SQL Server conoce cardinalidad real antes del INSERT
+  - Elimina sobreestimacion de memory grants
+  - VARCHAR(50) para evitar conversiones implicitas
+  - Variables para exclusiones (evita literales NVARCHAR)
+  - Rango de fecha sargable
+
 Autor: Refactorizacion Pipeline IPA
-Fecha: 2026-01-02
+Fecha: 2026-01-05
 ================================================================================
 */
 
 CREATE OR ALTER PROCEDURE [extract].[Extract_CAPM]
-    @FechaReporte NVARCHAR(10),
+    @FechaReporte DATE,                -- DATE para evitar conversiones
     @ID_Proceso BIGINT,
     @ID_Ejecucion BIGINT,
     @ID_Fund INT,
-    @Portfolio NVARCHAR(100)
+    @Portfolio VARCHAR(50)             -- VARCHAR(50) para coincidir con GD_EG_001
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -40,12 +48,18 @@ BEGIN
     DECLARE @RowsUpdated INT = 0;
     DECLARE @StartTime DATETIME = GETDATE();
     DECLARE @ErrorMessage NVARCHAR(4000);
-    DECLARE @PortfolioNormalizado NVARCHAR(100);
+    DECLARE @PortfolioNormalizado VARCHAR(100);
     DECLARE @ReturnCode INT;
+    -- Variables para rango de fecha sargable
+    DECLARE @FechaInicio DATETIME = CAST(@FechaReporte AS DATETIME);
+    DECLARE @FechaFin DATETIME = DATEADD(DAY, 1, @FechaInicio);
+    -- Variables VARCHAR para exclusiones (evita conversion implicita de literales)
+    DECLARE @ExcludedPortfolio1 VARCHAR(50) = 'MCCDF';
+    DECLARE @ExcludedPortfolio2 VARCHAR(50) = 'Moneda GSI RER';
 
     PRINT '========================================';
-    PRINT 'EXTRACT_CAPM - INICIO (v2 - Per-Fund)';
-    PRINT 'Fecha: ' + ISNULL(@FechaReporte, 'NULL');
+    PRINT 'EXTRACT_CAPM - INICIO (v4 - TempTable Stats)';
+    PRINT 'Fecha: ' + CONVERT(VARCHAR(10), @FechaReporte, 120);
     PRINT 'ID_Proceso: ' + CAST(@ID_Proceso AS NVARCHAR(20));
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
@@ -64,19 +78,32 @@ BEGIN
         IF @ReturnCode != 0
             RETURN 3;  -- ERROR_CRITICO
 
-        SET @PortfolioNormalizado = extract.fn_NormalizePortfolio(@Portfolio);
+        SET @PortfolioNormalizado = CAST(extract.fn_NormalizePortfolio(@Portfolio) AS VARCHAR(50));
 
-        -- Verificar datos en origen
-        SELECT @SourceRows = COUNT(*)
+        -- FASE 1: Cargar datos en temp table (SQL Server crea estadisticas automaticamente)
+        DROP TABLE IF EXISTS #CAPM_Stage;
+
+        SELECT
+            @PortfolioNormalizado AS Portfolio,
+            @FechaReporte AS FechaReporte,
+            @FechaReporte AS FechaCartera,
+            LocationAcct AS InvestID,
+            InvestDescription AS LocalCurrency,
+            TotalText, LSDesc, Qty, FXRate, CostBook, MVBook,
+            UnRealGL, percentInvest, percentSign, sumStatement
+        INTO #CAPM_Stage
         FROM [GD_EG_001].[dbo].[GD_R_Cash_Appraisal_Moneda] WITH (NOLOCK)
-        WHERE CAST(Fecha AS DATE) = @FechaReporte
+        WHERE Fecha >= @FechaInicio AND Fecha < @FechaFin
           AND Portfolio = @Portfolio
-          AND Portfolio NOT IN ('MCCDF', 'Moneda GSI RER');
+          AND Portfolio NOT IN (@ExcludedPortfolio1, @ExcludedPortfolio2);
 
-        PRINT 'VALIDACION: Registros encontrados para ' + @Portfolio + ' = ' + CAST(@SourceRows AS NVARCHAR(10));
+        SET @SourceRows = @@ROWCOUNT;
+
+        PRINT 'VALIDACION: Registros en staging para ' + @Portfolio + ' = ' + CAST(@SourceRows AS NVARCHAR(10));
 
         IF @SourceRows = 0
         BEGIN
+            DROP TABLE IF EXISTS #CAPM_Stage;
             PRINT 'INFORMACION: No hay datos CAPM para ' + @Portfolio;
             PRINT 'EXTRACT_CAPM - FINALIZADO (Sin datos)';
             RETURN 1;
@@ -84,20 +111,7 @@ BEGIN
 
         BEGIN TRANSACTION;
 
-        ;WITH CAPM_Data AS (
-            SELECT
-                @PortfolioNormalizado AS Portfolio,
-                CAST(Fecha AS DATE) AS FechaReporte,
-                CAST(Fecha AS DATE) AS FechaCartera,
-                LocationAcct AS InvestID,
-                InvestDescription AS LocalCurrency,
-                TotalText, LSDesc, Qty, FXRate, CostBook, MVBook,
-                UnRealGL, percentInvest, percentSign, sumStatement
-            FROM [GD_EG_001].[dbo].[GD_R_Cash_Appraisal_Moneda] WITH (NOLOCK)
-            WHERE CAST(Fecha AS DATE) = @FechaReporte
-              AND Portfolio = @Portfolio
-              AND Portfolio NOT IN ('MCCDF', 'Moneda GSI RER')
-        )
+        -- FASE 2: INSERT desde temp table (cardinalidad exacta conocida = @SourceRows)
         INSERT INTO [extract].[CAPM] WITH (ROWLOCK)
         (
             ID_Proceso, ID_Ejecucion, ID_Fund,
@@ -110,9 +124,11 @@ BEGIN
             Portfolio, FechaReporte, FechaCartera, InvestID, LocalCurrency,
             TotalText, LSDesc, Qty, FXRate, CostBook, MVBook,
             UnRealGL, percentInvest, percentSign, sumStatement
-        FROM CAPM_Data;
+        FROM #CAPM_Stage;
 
         SET @RowsInserted = @@ROWCOUNT;
+
+        DROP TABLE IF EXISTS #CAPM_Stage;
 
         IF @RowsInserted <> @SourceRows
         BEGIN
@@ -167,6 +183,8 @@ BEGIN
         IF @@TRANCOUNT > 0
             ROLLBACK TRANSACTION;
 
+        DROP TABLE IF EXISTS #CAPM_Stage;
+
         SET @ErrorMessage = ERROR_MESSAGE();
 
         PRINT '========================================';
@@ -175,7 +193,6 @@ BEGIN
         PRINT 'Linea: ' + CAST(ERROR_LINE() AS NVARCHAR(10));
         PRINT '========================================';
 
-        PRINT 'Extract_CAPM ERROR: ' + @ErrorMessage;
         RETURN 3;  -- ERROR_CRITICO
     END CATCH
 END

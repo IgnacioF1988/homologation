@@ -6,12 +6,17 @@ Descripcion: Script para ejecutar manualmente el pipeline completo.
              Ejecucion TRANSPARENTE - solo llama SPs del pipeline.
              No hace limpiezas ni manipulaciones extra.
 
+Novedades v2:
+  - Limpieza de logs.Validaciones_Ejecucion
+  - Consulta de validaciones via logs.vw_Validaciones_Detalle
+  - sp_ValidateFund ahora ejecuta TODAS las validaciones (no fail-fast)
+
 Instrucciones:
   1. Ejecutar en SSMS conectado a INTELIGENCIA_PRODUCTO_FULLSTACK
   2. Puede ejecutar secciones individuales para debug
   3. Los errores se muestran directamente
 
-Fecha: 2026-01-02
+Fecha: 2026-01-05
 ================================================================================
 */
 
@@ -24,9 +29,9 @@ SET NOCOUNT ON;
 -- VARIABLES DE EJECUCION (modificar segun necesidad)
 -- ============================================================================
 DECLARE @FechaReporte NVARCHAR(10) = '2024-12-30';
-DECLARE @ID_Proceso BIGINT = 100;
-DECLARE @ID_Ejecucion BIGINT = 100;
-DECLARE @ID_Fund INT = 2;
+DECLARE @ID_Proceso BIGINT = 100;        -- Cambiar para cada ejecucion
+DECLARE @ID_Ejecucion BIGINT = 100;      -- Cambiar para cada ejecucion
+DECLARE @ID_Fund INT = 2;                -- Alturas II
 DECLARE @Portfolio NVARCHAR(100) = 'ALTURAS II';
 
 -- Variables de salida
@@ -34,7 +39,7 @@ DECLARE @ReturnCode INT;
 DECLARE @ErrorMessage NVARCHAR(500);
 
 PRINT '========================================================================';
-PRINT '         TEST MANUAL - ALTURAS II (Ejecucion Transparente)';
+PRINT '         TEST MANUAL - ALTURAS II (Ejecucion Transparente v2)';
 PRINT '========================================================================';
 PRINT '';
 PRINT 'Parametros:';
@@ -81,13 +86,17 @@ DELETE FROM sandbox.Homologacion_Instrumentos WHERE ID_Ejecucion = @ID_Ejecucion
 DELETE FROM sandbox.Homologacion_Monedas WHERE ID_Ejecucion = @ID_Ejecucion;
 DELETE FROM sandbox.Alertas_Descuadre_Cash WHERE ID_Ejecucion = @ID_Ejecucion;
 DELETE FROM sandbox.Alertas_Descuadre_Derivados WHERE ID_Ejecucion = @ID_Ejecucion;
+DELETE FROM sandbox.Alertas_Descuadre_NAV WHERE ID_Ejecucion = @ID_Ejecucion;
 DELETE FROM sandbox.Alertas_Suciedades_IPA WHERE ID_Ejecucion = @ID_Ejecucion;
 DELETE FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion = @ID_Ejecucion;
+
+-- Limpiar logs de validaciones de esta ejecucion
+DELETE FROM logs.Validaciones_Ejecucion WHERE ID_Ejecucion = @ID_Ejecucion;
 
 -- Limpiar process de esta ejecucion
 DELETE FROM process.CUBO_Final WHERE ID_Ejecucion = @ID_Ejecucion;
 
-PRINT '  [OK] Datos de ejecucion anterior eliminados';
+PRINT '  [OK] Datos de ejecucion anterior eliminados (extract, sandbox, logs, process)';
 
 -- ============================================================================
 -- PASO 3: EJECUTAR EXTRACTS
@@ -117,7 +126,9 @@ EXEC extract.Extract_PNL @FechaReporte, @ID_Proceso, @ID_Ejecucion, @ID_Fund, @P
 PRINT '  Ejecutando Extract_PosModRF...';
 EXEC extract.Extract_PosModRF @FechaReporte, @ID_Proceso, @ID_Ejecucion, @ID_Fund, @Portfolio;
 
--- NO ejecutamos Derivados porque Req_Derivados = 0 en config
+-- Extract Derivados (se ejecuta aunque Req_Derivados = 0, el SP valida si hay datos)
+PRINT '  Ejecutando Extract_Derivados...';
+EXEC extract.Extract_Derivados @FechaReporte, @ID_Proceso, @ID_Ejecucion, @ID_Fund, @Portfolio;
 
 PRINT '';
 PRINT '  Resumen extracts cargados:';
@@ -167,6 +178,7 @@ SELECT
         WHEN 6  THEN 'HOMOLOGACION_INSTRUMENTOS - Instrumentos sin homologar'
         WHEN 7  THEN 'DESCUADRES_CAPM - Descuadre en Cash'
         WHEN 8  THEN 'DESCUADRES_DERIVADOS - Descuadre en Derivados'
+        WHEN 9  THEN 'DESCUADRES_NAV - Descuadre en NAV'
         WHEN 10 THEN 'HOMOLOGACION_FONDOS - Fondo sin homologar'
         WHEN 11 THEN 'HOMOLOGACION_MONEDAS - Monedas sin homologar'
         WHEN 13 THEN 'EXTRACT_IPA_FALTANTE'
@@ -179,11 +191,45 @@ SELECT
     END AS Interpretacion;
 
 -- ============================================================================
--- PASO 6: VERIFICAR RESULTADOS Y ALERTAS
+-- PASO 6: LOG DE VALIDACIONES (NUEVO - v2)
 -- ============================================================================
 PRINT '';
 PRINT '------------------------------------------------------------------------';
-PRINT ' PASO 6: VERIFICAR RESULTADOS';
+PRINT ' PASO 6: LOG DE VALIDACIONES (logs.vw_Validaciones_Detalle)';
+PRINT '------------------------------------------------------------------------';
+
+SELECT
+    CodigoValidacion,
+    CodigoDescripcion,
+    TipoValidacion,
+    Categoria,
+    Mensaje,
+    Cantidad,
+    CASE WHEN EsCritico = 1 THEN 'SI' ELSE 'NO' END AS EsCritico,
+    TablaSandbox,
+    AccionRecomendada
+FROM logs.vw_Validaciones_Detalle
+WHERE ID_Ejecucion = @ID_Ejecucion
+ORDER BY FechaProceso;
+
+-- Resumen por categoria
+PRINT '';
+PRINT '  Resumen por categoria:';
+SELECT
+    Categoria,
+    COUNT(*) AS TotalValidaciones,
+    SUM(CASE WHEN EsCritico = 1 THEN 1 ELSE 0 END) AS Criticas,
+    SUM(CASE WHEN CodigoValidacion = 0 THEN 1 ELSE 0 END) AS OK
+FROM logs.Validaciones_Ejecucion
+WHERE ID_Ejecucion = @ID_Ejecucion
+GROUP BY Categoria;
+
+-- ============================================================================
+-- PASO 7: VERIFICAR RESULTADOS CUBO
+-- ============================================================================
+PRINT '';
+PRINT '------------------------------------------------------------------------';
+PRINT ' PASO 7: VERIFICAR RESULTADOS CUBO';
 PRINT '------------------------------------------------------------------------';
 
 -- Resumen CUBO_Final
@@ -207,9 +253,15 @@ FROM process.CUBO_Final
 WHERE ID_Ejecucion = @ID_Ejecucion
 GROUP BY TipoRegistro;
 
--- Alertas sandbox
+-- ============================================================================
+-- PASO 8: ALERTAS EN SANDBOX
+-- ============================================================================
 PRINT '';
-PRINT '  Alertas en sandbox:';
+PRINT '------------------------------------------------------------------------';
+PRINT ' PASO 8: ALERTAS EN SANDBOX';
+PRINT '------------------------------------------------------------------------';
+
+-- Conteo de alertas
 SELECT 'Homologacion_Fondos' AS Tabla, COUNT(*) AS Registros FROM sandbox.Homologacion_Fondos WHERE ID_Ejecucion = @ID_Ejecucion
 UNION ALL SELECT 'Homologacion_Instrumentos', COUNT(*) FROM sandbox.Homologacion_Instrumentos WHERE ID_Ejecucion = @ID_Ejecucion
 UNION ALL SELECT 'Homologacion_Monedas', COUNT(*) FROM sandbox.Homologacion_Monedas WHERE ID_Ejecucion = @ID_Ejecucion
@@ -220,11 +272,11 @@ UNION ALL SELECT 'Alertas_Descuadre_NAV', COUNT(*) FROM sandbox.Alertas_Descuadr
 UNION ALL SELECT 'Alertas_Extract_Faltante', COUNT(*) FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion = @ID_Ejecucion;
 
 -- ============================================================================
--- PASO 7: DETALLE DE ALERTAS (si existen)
+-- PASO 9: DETALLE DE ALERTAS (si existen)
 -- ============================================================================
 PRINT '';
 PRINT '------------------------------------------------------------------------';
-PRINT ' PASO 7: DETALLE DE ALERTAS';
+PRINT ' PASO 9: DETALLE DE ALERTAS';
 PRINT '------------------------------------------------------------------------';
 
 -- Suciedades
@@ -238,7 +290,7 @@ END
 -- Instrumentos sin homologar
 IF EXISTS (SELECT 1 FROM sandbox.Homologacion_Instrumentos WHERE ID_Ejecucion = @ID_Ejecucion)
 BEGIN
-    PRINT '  >> Instrumentos sin homologar:';
+    PRINT '  >> Instrumentos sin homologar (TOP 20):';
     SELECT TOP 20 Instrumento, Currency, Source
     FROM sandbox.Homologacion_Instrumentos WHERE ID_Ejecucion = @ID_Ejecucion;
 END
@@ -251,12 +303,28 @@ BEGIN
     FROM sandbox.Homologacion_Monedas WHERE ID_Ejecucion = @ID_Ejecucion;
 END
 
+-- Extracts faltantes
+IF EXISTS (SELECT 1 FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion = @ID_Ejecucion)
+BEGIN
+    PRINT '  >> Extracts faltantes:';
+    SELECT TipoReporte, Obligatorio
+    FROM sandbox.Alertas_Extract_Faltante WHERE ID_Ejecucion = @ID_Ejecucion;
+END
+
 -- Descuadre Cash
 IF EXISTS (SELECT 1 FROM sandbox.Alertas_Descuadre_Cash WHERE ID_Ejecucion = @ID_Ejecucion)
 BEGIN
     PRINT '  >> Descuadre Cash:';
     SELECT Portfolio, Total_IPA_Cash, Total_CAPM, Diferencia, UmbralAplicado
     FROM sandbox.Alertas_Descuadre_Cash WHERE ID_Ejecucion = @ID_Ejecucion;
+END
+
+-- Descuadre Derivados
+IF EXISTS (SELECT 1 FROM sandbox.Alertas_Descuadre_Derivados WHERE ID_Ejecucion = @ID_Ejecucion)
+BEGIN
+    PRINT '  >> Descuadre Derivados:';
+    SELECT Portfolio, MVBook_IPA, MTM_Derivados, Diferencia, UmbralAplicado
+    FROM sandbox.Alertas_Descuadre_Derivados WHERE ID_Ejecucion = @ID_Ejecucion;
 END
 
 -- Descuadre NAV

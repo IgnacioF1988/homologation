@@ -6,9 +6,16 @@ Descripcion: Funciones auxiliares para los SPs de extraccion.
              Centralizan logica comun para evitar redundancia.
 
 Funciones:
-  - extract.fn_NormalizePortfolio : Normaliza nombres de portfolio
-  - extract.fn_IsExcludedPortfolio: Verifica si portfolio esta excluido
-  - extract.fn_ValidateParams     : Valida parametros de entrada
+  - extract.fn_NormalizePortfolio  : Normaliza nombres de portfolio
+  - extract.fn_GetDerivadosPortfolio: Portfolio equivalente para Derivados
+
+Procedures:
+  - extract.sp_LogExtract          : Log de eventos de extraccion
+  - extract.sp_ValidateExtractParams: Valida parametros de entrada
+
+Nota: fn_IsExcludedPortfolio fue eliminada (2026-01-05) porque
+      usar funciones en WHERE impide index seeks. Los portfolios
+      excluidos ahora se manejan con variables VARCHAR en cada SP.
 
 Autor: Refactorizacion Pipeline IPA
 Fecha: 2026-01-02
@@ -25,37 +32,15 @@ GO
 
 CREATE FUNCTION [extract].[fn_NormalizePortfolio]
 (
-    @Portfolio NVARCHAR(100)
+    @Portfolio VARCHAR(100)              -- VARCHAR para coincidir con GD_EG_001
 )
-RETURNS NVARCHAR(100)
+RETURNS VARCHAR(100)
 AS
 BEGIN
     RETURN CASE
         WHEN @Portfolio = 'MLCC' THEN 'MLCC_Geneva'
         WHEN @Portfolio = 'MUCC II' THEN 'MLCC_Geneva'
         ELSE @Portfolio
-    END;
-END
-GO
-
--- ============================================================================
--- FUNCION: fn_IsExcludedPortfolio
--- Verifica si un portfolio debe ser excluido del procesamiento
--- ============================================================================
-IF OBJECT_ID('extract.fn_IsExcludedPortfolio', 'FN') IS NOT NULL
-    DROP FUNCTION extract.fn_IsExcludedPortfolio;
-GO
-
-CREATE FUNCTION [extract].[fn_IsExcludedPortfolio]
-(
-    @Portfolio NVARCHAR(100)
-)
-RETURNS BIT
-AS
-BEGIN
-    RETURN CASE
-        WHEN @Portfolio IN ('MCCDF', 'Moneda GSI RER') THEN 1
-        ELSE 0
     END;
 END
 GO
@@ -70,9 +55,9 @@ GO
 
 CREATE FUNCTION [extract].[fn_GetDerivadosPortfolio]
 (
-    @Portfolio NVARCHAR(100)
+    @Portfolio VARCHAR(100)              -- VARCHAR para coincidir con GD_EG_001
 )
-RETURNS NVARCHAR(100)
+RETURNS VARCHAR(100)
 AS
 BEGIN
     RETURN CASE
@@ -140,23 +125,17 @@ GO
 
 CREATE PROCEDURE [extract].[sp_ValidateExtractParams]
     @SPName NVARCHAR(100),
-    @FechaReporte NVARCHAR(10),
-    @Portfolio NVARCHAR(100) = NULL,
+    @FechaReporte DATE,                  -- DATE para evitar conversiones
+    @Portfolio VARCHAR(100) = NULL,      -- VARCHAR para coincidir con GD_EG_001
     @RequirePortfolio BIT = 1
 AS
 BEGIN
     SET NOCOUNT ON;
 
     -- Validar FechaReporte
-    IF @FechaReporte IS NULL OR LEN(@FechaReporte) = 0
+    IF @FechaReporte IS NULL
     BEGIN
         EXEC extract.sp_LogExtract @SPName, 'Fecha de reporte no puede ser NULL', 'ERROR';
-        RETURN 3;  -- ERROR_CRITICO
-    END
-
-    IF ISDATE(@FechaReporte) = 0
-    BEGIN
-        EXEC extract.sp_LogExtract @SPName, 'Formato de fecha invalido. Use YYYY-MM-DD', 'ERROR';
         RETURN 3;  -- ERROR_CRITICO
     END
 

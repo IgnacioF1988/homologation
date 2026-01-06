@@ -10,6 +10,10 @@ Instrucciones:
   5. F5 para ejecutar
 
 Si SQLCMD mode NO esta disponible, usar Deploy_FULLSTACK.bat desde CMD.
+
+IMPORTANTE - INDICES EN BASE FUENTE:
+  Antes de ejecutar el pipeline, crear indices de rendimiento en [GD_EG_001]:
+  Ejecutar: EXTRACT\00_Indices_Source_GD_EG_001.sql (conectado a GD_EG_001)
 ================================================================================
 */
 
@@ -27,13 +31,17 @@ PRINT '';
 GO
 
 -- ============================================================================
--- FASE 1: INFRAESTRUCTURA BASE
+-- FASE 1: INFRAESTRUCTURA BASE (Schemas y Tablas)
 -- ============================================================================
 PRINT '----------------------------------------------------------------------';
 PRINT ' FASE 1: INFRAESTRUCTURA BASE                                         ';
 PRINT '----------------------------------------------------------------------';
 GO
-:r "C:\Users\ifuentes\homologation\server\database\Refactor\00_MASTER_MIGRATION.sql"
+:r "C:\Users\ifuentes\homologation\server\database\Refactor\CORE\00_Tables_Staging.sql"
+GO
+:r "C:\Users\ifuentes\homologation\server\database\Refactor\CORE\00_Tables_Sandbox.sql"
+GO
+:r "C:\Users\ifuentes\homologation\server\database\Refactor\CORE\00_Tables_Process.sql"
 GO
 :r "C:\Users\ifuentes\homologation\server\database\Refactor\CORE\00_Tables_Dimensionales.sql"
 GO
@@ -132,7 +140,7 @@ PRINT '                    DEPLOY COMPLETADO                                 ';
 PRINT '======================================================================';
 
 SELECT 'Schemas' AS Tipo, COUNT(*) AS Cantidad
-FROM sys.schemas WHERE name IN ('extract', 'pipeline', 'staging', 'sandbox', 'config', 'logs', 'dimensionales')
+FROM sys.schemas WHERE name IN ('extract', 'process', 'staging', 'sandbox', 'config', 'dimensionales')
 UNION ALL
 SELECT 'Tablas extract.*', COUNT(*)
 FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -141,6 +149,18 @@ UNION ALL
 SELECT 'Tablas config.*', COUNT(*)
 FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
 WHERE s.name = 'config'
+UNION ALL
+SELECT 'Tablas staging.*', COUNT(*)
+FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE s.name = 'staging'
+UNION ALL
+SELECT 'Tablas sandbox.*', COUNT(*)
+FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE s.name = 'sandbox'
+UNION ALL
+SELECT 'Tablas process.*', COUNT(*)
+FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE s.name = 'process'
 UNION ALL
 SELECT 'Tablas dimensionales.*', COUNT(*)
 FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id

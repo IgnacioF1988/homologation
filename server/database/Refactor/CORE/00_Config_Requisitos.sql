@@ -104,6 +104,35 @@ END
 GO
 
 -- ============================================================================
+-- TABLA: config.Extract_Source
+-- Define el Source de cada tabla extract para validacion de homologacion
+-- ============================================================================
+IF NOT EXISTS (SELECT 1 FROM sys.tables t
+               INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+               WHERE s.name = 'config' AND t.name = 'Extract_Source')
+BEGIN
+    CREATE TABLE [config].[Extract_Source] (
+        ID INT IDENTITY(1,1) PRIMARY KEY,
+        ExtractTable NVARCHAR(50) NOT NULL UNIQUE,  -- Nombre de tabla extract (IPA, CAPM, etc.)
+        SourceName NVARCHAR(50) NOT NULL,           -- Source para HOMOL_Funds
+        Descripcion NVARCHAR(200) NULL,
+        IsActive BIT NOT NULL DEFAULT 1
+    );
+
+    -- Datos iniciales
+    INSERT INTO [config].[Extract_Source] (ExtractTable, SourceName, Descripcion) VALUES
+    ('IPA', 'GENEVA', 'Investment Position Appraisal - Geneva'),
+    ('CAPM', 'GENEVA', 'Cash Appraisal por Moneda - Geneva'),
+    ('SONA', 'GENEVA', 'State of Net Assets - Geneva'),
+    ('PNL', 'GENEVA', 'Profit and Loss - Geneva'),
+    ('PosModRF', 'GENEVA', 'Posiciones Mod Renta Fija - Geneva'),
+    ('Derivados', 'DERIVADOS', 'Derivados - Sistema externo');
+
+    PRINT 'Tabla [config].[Extract_Source] creada con datos iniciales';
+END
+GO
+
+-- ============================================================================
 -- FUNCION: fn_GetRequisitosExtract
 -- Obtiene los requisitos de un fondo (o defaults si no tiene config especifica)
 -- ============================================================================
