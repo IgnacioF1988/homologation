@@ -20,11 +20,14 @@ GO
 
 SET NOCOUNT ON;
 
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+
 -- ============================================================================
 -- CONFIGURACION (MODIFICAR AQUI)
 -- ============================================================================
-DECLARE @FechaReporte NVARCHAR(10) = '2024-12-25';  -- Fecha a procesar
-DECLARE @ID_Fund_1 INT = 60;                        -- ID del fondo 1
+DECLARE @FechaReporte DATE = '2025-12-25';  -- Fecha a procesar (tipo DATE para evitar CONVERT)
+DECLARE @ID_Fund_1 INT = 20;                        -- ID del fondo 1
 DECLARE @ID_Fund_2 INT = 2;                         -- ID del fondo 2
 
 -- IDs de ejecucion (cambiar si hay conflicto)
@@ -84,7 +87,7 @@ PRINT '=========================================================================
 PRINT '  TEST GENERICO: VALIDACION PARALELA DE 2 FONDOS'
 PRINT '================================================================================'
 PRINT ''
-PRINT '  Fecha Reporte: ' + @FechaReporte
+PRINT '  Fecha Reporte: ' + CONVERT(NVARCHAR(10), @FechaReporte, 120)
 PRINT '  Fondo 1: ' + @Portfolio_1 + ' (ID: ' + CAST(@ID_Fund_1 AS NVARCHAR(10)) + ')'
 PRINT '  Fondo 2: ' + @Portfolio_2 + ' (ID: ' + CAST(@ID_Fund_2 AS NVARCHAR(10)) + ')'
 PRINT ''
@@ -236,13 +239,13 @@ PRINT ''
 PRINT '  RESUMEN POR FONDO:'
 SELECT
     Fondo,
-    CASE CodigoRetorno
-        WHEN 0 THEN 'OK'
-        WHEN 5 THEN 'SUCIEDADES'
-        WHEN 6 THEN 'INSTRUMENTOS'
-        WHEN 10 THEN 'FONDOS'
-        WHEN 11 THEN 'MONEDAS'
-        ELSE 'ERROR(' + CAST(CodigoRetorno AS NVARCHAR(5)) + ')'
+    CASE
+        WHEN CodigoRetorno = 0 THEN N'OK'
+        WHEN CodigoRetorno = 5 THEN N'SUCIEDADES'
+        WHEN CodigoRetorno = 6 THEN N'INSTRUMENTOS'
+        WHEN CodigoRetorno = 10 THEN N'FONDOS'
+        WHEN CodigoRetorno = 11 THEN N'MONEDAS'
+        ELSE N'ERROR(' + CAST(CodigoRetorno AS NVARCHAR(5)) + N')'
     END AS Estado,
     IPA, CAPM, SONA, PNL,
     Suciedades AS Suc,
@@ -256,7 +259,7 @@ PRINT ''
 PRINT '  PENDIENTES EN SANDBOX (ambos fondos):'
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Cantidad
 FROM sandbox.vw_Pendientes_Por_Fondo
@@ -270,7 +273,7 @@ SELECT
     h.Instrumento,
     h.Source,
     h.Currency,
-    STRING_AGG(f.Fund_Name, ', ') AS Fondos
+    STRING_AGG(f.Fund_Code, ', ') AS Fondos
 FROM sandbox.Homologacion_Instrumentos h
 INNER JOIN sandbox.Homologacion_Instrumentos_Fondos hf ON h.ID = hf.ID_Homologacion
 INNER JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund
@@ -286,7 +289,7 @@ SELECT
     s.InvestID,
     s.Qty,
     s.MVBook,
-    STRING_AGG(f.Fund_Name, ', ') AS Fondos
+    STRING_AGG(f.Fund_Code, ', ') AS Fondos
 FROM sandbox.Alertas_Suciedades_IPA s
 INNER JOIN sandbox.Alertas_Suciedades_IPA_Fondos sf ON s.ID = sf.ID_Suciedad
 INNER JOIN dimensionales.BD_Funds f ON sf.ID_Fund = f.ID_Fund

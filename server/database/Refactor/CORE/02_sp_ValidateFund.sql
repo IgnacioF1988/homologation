@@ -1,12 +1,34 @@
+USE INTELIGENCIA_PRODUCTO_FULLSTACK;
+GO
+
 /*
 ================================================================================
 SP: staging.sp_ValidateFund
-Version: v6.2 - Global Sandbox N:M (Fixed precision + duplicate key)
+Version: v6.7 - RECOMPILE optimization (indices-based)
 
 Descripcion: Ejecuta TODAS las validaciones y registra TODOS los problemas
              en sandbox (estructura N:M) y en logs.Validaciones_Ejecucion.
 
-Cambios v6.1:
+Cambios v6.7:
+  - PERF: Cambiado de MIN_GRANT_PERCENT/MAX_GRANT_PERCENT a RECOMPILE
+          RECOMPILE asegura que SQL Server use estadisticas actuales
+          al compilar cada query (optimo con indices covering nuevos)
+  - REQUISITO: Ejecutar 99_Optimizacion_Definitiva.sql antes
+
+Cambios v6.6:
+  - FIX: Parametro @FechaReporte cambiado de NVARCHAR(10) a DATE
+
+Cambios v6.5:
+  - PERF: Hints de memory grant (reemplazados en v6.7)
+
+Cambios v6.4:
+  - PERF: Hints iniciales solo en Instrumentos y Monedas
+
+Cambios v6.3:
+  - FIX: Deduplicar suciedades usando CAST a DECIMAL(28,10) + ROW_NUMBER
+         para evitar duplicate key cuando FLOAT se convierte a la precision de destino
+
+Cambios v6.1/v6.2:
   - Tablas sandbox globales sin ID_Ejecucion
   - Estructura N:M: tabla principal + tabla de relacion con fondos
   - MERGE para insertar items nuevos (o agregar relacion con fondo)
@@ -43,7 +65,7 @@ CREATE OR ALTER PROCEDURE [staging].[sp_ValidateFund]
     @ID_Ejecucion BIGINT,
     @ID_Proceso BIGINT,
     @ID_Fund INT,
-    @FechaReporte NVARCHAR(10),
+    @FechaReporte DATE,  -- v6.6: Cambiado de NVARCHAR(10) a DATE para evitar CONVERT implicito
     @Source NVARCHAR(50) = 'GENEVA',
     -- Outputs
     @ErrorMessage NVARCHAR(500) OUTPUT,
@@ -88,10 +110,10 @@ BEGIN
     DECLARE @SourceDerivados NVARCHAR(50);
 
     PRINT '════════════════════════════════════════════════════════════════';
-    PRINT 'sp_ValidateFund v6: INICIO (Global Sandbox N:M)';
+    PRINT 'sp_ValidateFund v6.7: INICIO (Global Sandbox N:M + RECOMPILE)';
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
-    PRINT 'FechaReporte: ' + @FechaReporte;
+    PRINT 'FechaReporte: ' + CONVERT(NVARCHAR(10), @FechaReporte, 120);
     PRINT '════════════════════════════════════════════════════════════════';
 
     BEGIN TRY
@@ -110,7 +132,7 @@ BEGIN
             RETURN 3;
         END
 
-        IF @FechaReporte IS NULL OR LEN(RTRIM(@FechaReporte)) = 0
+        IF @FechaReporte IS NULL
         BEGIN
             SET @ErrorMessage = 'FechaReporte obligatorio';
             RETURN 3;
@@ -314,7 +336,8 @@ BEGIN
         WHERE d.ID_Ejecucion = @ID_Ejecucion
           AND d.FechaReporte = @FechaReporte
           AND d.ID_Fund = @ID_Fund
-          AND hf.HOMOL_Fund_ID IS NULL;
+          AND hf.HOMOL_Fund_ID IS NULL
+        OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
 
         -- Insertar en tabla principal (solo si no existe o Estado != 'Ok')
         MERGE sandbox.Homologacion_Fondos AS target
@@ -362,38 +385,52 @@ BEGIN
 
         -- =====================================================================
         -- VALIDACION 3: Calidad de datos IPA - Suciedades (N:M Global)
+        -- FIX v6.3: Deduplicar basado en DECIMAL(28,10) para evitar duplicate key
+        --           ya que la tabla destino usa esa precision
         -- =====================================================================
         IF @RegistrosIPA > 0
         BEGIN
             -- Temp table para suciedades de esta ejecucion
+            -- FIX v6.3: Convertir a DECIMAL(28,10) y deduplicar con ROW_NUMBER
+            --           porque la tabla destino usa esa precision
             DROP TABLE IF EXISTS #SuciedadesDetectadas;
 
-            SELECT
-                InvestID,
-                InvestDescription,
-                Qty,
-                MVBook,
-                AI
+            ;WITH SuciedadesRaw AS (
+                SELECT
+                    InvestID,
+                    InvestDescription,
+                    CAST(Qty AS DECIMAL(28,10)) AS Qty,
+                    CAST(MVBook AS DECIMAL(28,10)) AS MVBook,
+                    AI,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY InvestID, CAST(Qty AS DECIMAL(28,10)), CAST(MVBook AS DECIMAL(28,10))
+                        ORDER BY InvestDescription
+                    ) AS rn
+                FROM extract.IPA WITH (NOLOCK)
+                WHERE ID_Ejecucion = @ID_Ejecucion
+                  AND FechaReporte = @FechaReporte
+                  AND ID_Fund = @ID_Fund
+                  AND ABS(ISNULL(Qty, 0)) < @UmbralSuciedad
+                  AND ABS(ISNULL(Qty, 0)) > 0
+            )
+            SELECT InvestID, InvestDescription, Qty, MVBook, AI
             INTO #SuciedadesDetectadas
-            FROM extract.IPA WITH (NOLOCK)
-            WHERE ID_Ejecucion = @ID_Ejecucion
-              AND FechaReporte = @FechaReporte
-              AND ID_Fund = @ID_Fund
-              AND ABS(ISNULL(Qty, 0)) < @UmbralSuciedad
-              AND ABS(ISNULL(Qty, 0)) > 0;
+            FROM SuciedadesRaw
+            WHERE rn = 1
+            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
 
             IF EXISTS (SELECT 1 FROM #SuciedadesDetectadas)
             BEGIN
                 -- Insertar en tabla principal (solo si no existe)
-                -- FIX v6.2: Usar ROUND(,10) para igualar precision de DECIMAL(28,10)
+                -- FIX v6.3: Datos ya convertidos a DECIMAL(28,10) y deduplicados
                 MERGE sandbox.Alertas_Suciedades_IPA AS target
                 USING #SuciedadesDetectadas AS source
                 ON target.InvestID = source.InvestID
-                   AND target.Qty = ROUND(source.Qty, 10)
-                   AND target.MVBook = ROUND(source.MVBook, 10)
+                   AND target.Qty = source.Qty
+                   AND target.MVBook = source.MVBook
                 WHEN NOT MATCHED THEN
                     INSERT (InvestID, InvestDescription, Qty, MVBook, AI, FechaDeteccion, Estado)
-                    VALUES (source.InvestID, source.InvestDescription, ROUND(source.Qty, 10), ROUND(source.MVBook, 10), source.AI, GETDATE(), 'Pendiente');
+                    VALUES (source.InvestID, source.InvestDescription, source.Qty, source.MVBook, source.AI, GETDATE(), 'Pendiente');
 
                 -- Insertar relacion con fondo (solo si no existe)
                 INSERT INTO sandbox.Alertas_Suciedades_IPA_Fondos (ID_Suciedad, ID_Fund)
@@ -401,8 +438,8 @@ BEGIN
                 FROM sandbox.Alertas_Suciedades_IPA s
                 INNER JOIN #SuciedadesDetectadas d
                     ON s.InvestID = d.InvestID
-                    AND s.Qty = ROUND(d.Qty, 10)
-                    AND s.MVBook = ROUND(d.MVBook, 10)
+                    AND s.Qty = d.Qty
+                    AND s.MVBook = d.MVBook
                 WHERE s.Estado = 'Pendiente'
                   AND NOT EXISTS (
                       SELECT 1 FROM sandbox.Alertas_Suciedades_IPA_Fondos sf
@@ -415,8 +452,8 @@ BEGIN
                 INNER JOIN sandbox.Alertas_Suciedades_IPA_Fondos sf ON s.ID = sf.ID_Suciedad
                 INNER JOIN #SuciedadesDetectadas d
                     ON s.InvestID = d.InvestID
-                    AND s.Qty = ROUND(d.Qty, 10)
-                    AND s.MVBook = ROUND(d.MVBook, 10)
+                    AND s.Qty = d.Qty
+                    AND s.MVBook = d.MVBook
                 WHERE sf.ID_Fund = @ID_Fund AND s.Estado = 'Pendiente';
 
                 IF @SuciedadesCount > 0
@@ -510,7 +547,8 @@ BEGIN
             SELECT Instrumento, Currency, Source
             INTO #InstrumentosSinHomologar
             FROM InstrumentosRanked
-            WHERE rn = 1;
+            WHERE rn = 1
+            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
 
             IF EXISTS (SELECT 1 FROM #InstrumentosSinHomologar)
             BEGIN
@@ -630,7 +668,8 @@ BEGIN
                   AND deriv.ID_Fund = @ID_Fund
                   AND hm.id_CURR IS NULL
                   AND deriv.Moneda_PCorta IS NOT NULL
-            ) src;
+            ) src
+            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
 
             IF EXISTS (SELECT 1 FROM #MonedasSinHomologar)
             BEGIN
