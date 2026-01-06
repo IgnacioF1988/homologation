@@ -58,7 +58,7 @@ PRINT ' PASO 1: VERIFICAR CONFIGURACION';
 PRINT '------------------------------------------------------------------------';
 
 SELECT
-    ID_Fund, Fund_Name,
+    ID_Fund, Fund_Code,
     Req_IPA, Req_CAPM, Req_SONA, Req_PNL, Req_Derivados, Req_PosModRF,
     ConfigType
 FROM config.vw_Requisitos_Extract_Completo

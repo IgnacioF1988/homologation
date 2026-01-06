@@ -31,7 +31,7 @@ SELECT
     h.Source,
     h.Currency,
     h.FechaDeteccion,
-    STRING_AGG(f.Fund_Name, ', ') AS FondosAfectados,
+    STRING_AGG(f.Fund_Code, ', ') AS FondosAfectados,
     COUNT(hf.ID_Fund) AS CantidadFondos
 FROM sandbox.Homologacion_Instrumentos h
 LEFT JOIN sandbox.Homologacion_Instrumentos_Fondos hf ON h.ID = hf.ID_Homologacion
@@ -54,7 +54,7 @@ SELECT
     h.Moneda,
     h.Source,
     h.FechaDeteccion,
-    STRING_AGG(f.Fund_Name, ', ') AS FondosAfectados,
+    STRING_AGG(f.Fund_Code, ', ') AS FondosAfectados,
     COUNT(hf.ID_Fund) AS CantidadFondos
 FROM sandbox.Homologacion_Monedas h
 LEFT JOIN sandbox.Homologacion_Monedas_Fondos hf ON h.ID = hf.ID_Homologacion
@@ -77,7 +77,7 @@ SELECT
     h.NombreFondo,
     h.Source,
     h.FechaDeteccion,
-    STRING_AGG(f.Fund_Name, ', ') AS FondosAfectados,
+    STRING_AGG(f.Fund_Code, ', ') AS FondosAfectados,
     COUNT(hf.ID_Fund) AS CantidadFondos
 FROM sandbox.Homologacion_Fondos h
 LEFT JOIN sandbox.Homologacion_Fondos_Fondos hf ON h.ID = hf.ID_Homologacion
@@ -103,7 +103,7 @@ SELECT
     s.MVBook,
     s.AI,
     s.FechaDeteccion,
-    STRING_AGG(f.Fund_Name, ', ') AS FondosAfectados,
+    STRING_AGG(f.Fund_Code, ', ') AS FondosAfectados,
     COUNT(sf.ID_Fund) AS CantidadFondos
 FROM sandbox.Alertas_Suciedades_IPA s
 LEFT JOIN sandbox.Alertas_Suciedades_IPA_Fondos sf ON s.ID = sf.ID_Suciedad
@@ -125,56 +125,56 @@ AS
 -- Instrumentos pendientes por fondo
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'INSTRUMENTOS' AS TipoHomologacion,
     COUNT(*) AS CantidadPendiente
 FROM sandbox.Homologacion_Instrumentos h
 INNER JOIN sandbox.Homologacion_Instrumentos_Fondos hf ON h.ID = hf.ID_Homologacion
 LEFT JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund
 WHERE h.Estado = 'Pendiente'
-GROUP BY hf.ID_Fund, f.Fund_Name
+GROUP BY hf.ID_Fund, f.Fund_Code
 
 UNION ALL
 
 -- Monedas pendientes por fondo
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'MONEDAS' AS TipoHomologacion,
     COUNT(*) AS CantidadPendiente
 FROM sandbox.Homologacion_Monedas h
 INNER JOIN sandbox.Homologacion_Monedas_Fondos hf ON h.ID = hf.ID_Homologacion
 LEFT JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund
 WHERE h.Estado = 'Pendiente'
-GROUP BY hf.ID_Fund, f.Fund_Name
+GROUP BY hf.ID_Fund, f.Fund_Code
 
 UNION ALL
 
 -- Fondos sin homologar
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'FONDOS' AS TipoHomologacion,
     COUNT(*) AS CantidadPendiente
 FROM sandbox.Homologacion_Fondos h
 INNER JOIN sandbox.Homologacion_Fondos_Fondos hf ON h.ID = hf.ID_Homologacion
 LEFT JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund
 WHERE h.Estado = 'Pendiente'
-GROUP BY hf.ID_Fund, f.Fund_Name
+GROUP BY hf.ID_Fund, f.Fund_Code
 
 UNION ALL
 
 -- Suciedades pendientes por fondo
 SELECT
     sf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'SUCIEDADES' AS TipoHomologacion,
     COUNT(*) AS CantidadPendiente
 FROM sandbox.Alertas_Suciedades_IPA s
 INNER JOIN sandbox.Alertas_Suciedades_IPA_Fondos sf ON s.ID = sf.ID_Suciedad
 LEFT JOIN dimensionales.BD_Funds f ON sf.ID_Fund = f.ID_Fund
 WHERE s.Estado = 'Pendiente'
-GROUP BY sf.ID_Fund, f.Fund_Name;
+GROUP BY sf.ID_Fund, f.Fund_Code;
 GO
 
 PRINT 'Vista [sandbox].[vw_Pendientes_Por_Fondo] creada';
@@ -190,7 +190,7 @@ AS
 -- Instrumentos
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'INSTRUMENTO' AS Tipo,
     h.Instrumento AS Item,
     h.Source,
@@ -207,7 +207,7 @@ UNION ALL
 -- Monedas
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'MONEDA' AS Tipo,
     h.Moneda AS Item,
     h.Source,
@@ -224,7 +224,7 @@ UNION ALL
 -- Fondos sin homologar
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'FONDO' AS Tipo,
     h.NombreFondo AS Item,
     h.Source,
@@ -241,7 +241,7 @@ UNION ALL
 -- Suciedades
 SELECT
     sf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     'SUCIEDAD' AS Tipo,
     s.InvestID AS Item,
     'IPA' AS Source,

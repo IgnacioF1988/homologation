@@ -188,7 +188,7 @@ CREATE VIEW [config].[vw_Requisitos_Extract_Completo]
 AS
 SELECT
     f.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     COALESCE(r.Req_IPA, d.Req_IPA) AS Req_IPA,
     COALESCE(r.Req_CAPM, d.Req_CAPM) AS Req_CAPM,
     COALESCE(r.Req_SONA, d.Req_SONA) AS Req_SONA,

@@ -43,7 +43,7 @@ DECLARE @ID_Fund_AlturasII INT = 2;
 
 SELECT @ID_Fund_MLATHY = ID_Fund
 FROM dimensionales.BD_Funds
-WHERE Fund_Name LIKE '%MLATHY%';
+WHERE Fund_Code LIKE '%MLATHY%';
 
 -- Buscar un instrumento pendiente que NO este en HOMOL_Instrumentos
 SELECT TOP 1 @InstrumentoDemo = h.Instrumento

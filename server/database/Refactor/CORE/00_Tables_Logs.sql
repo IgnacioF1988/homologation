@@ -84,7 +84,7 @@ SELECT
     v.ID_Ejecucion,
     v.ID_Proceso,
     v.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     v.FechaReporte,
     v.CodigoValidacion,
     v.TipoValidacion,

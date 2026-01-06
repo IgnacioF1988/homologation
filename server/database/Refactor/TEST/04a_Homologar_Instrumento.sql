@@ -37,7 +37,7 @@ DECLARE @ID_Fund_AlturasII INT = 2;
 
 SELECT @ID_Fund_MLATHY = ID_Fund
 FROM dimensionales.BD_Funds
-WHERE Fund_Name LIKE '%MLATHY%' OR Fund_Name LIKE '%MLathy%';
+WHERE Fund_Code LIKE '%MLATHY%' OR Fund_Code LIKE '%MLathy%';
 
 PRINT '========================================================================'
 PRINT '       HOMOLOGAR UN INSTRUMENTO COMPARTIDO'
@@ -111,7 +111,7 @@ PRINT ''
 PRINT '  [SANDBOX] Fondos que lo necesitan:'
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     FORMAT(hf.FechaPrimeraDeteccion, 'yyyy-MM-dd HH:mm') AS PrimeraDeteccion
 FROM sandbox.Homologacion_Instrumentos_Fondos hf
 INNER JOIN sandbox.Homologacion_Instrumentos h ON hf.ID_Homologacion = h.ID
@@ -123,7 +123,7 @@ PRINT ''
 PRINT '  [VISTA] Pendientes por fondo ANTES:'
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Pendientes
 FROM sandbox.vw_Pendientes_Por_Fondo
@@ -199,7 +199,7 @@ PRINT ''
 PRINT '  [SANDBOX] Relaciones con fondos (historial preservado):'
 SELECT
     hf.ID_Fund,
-    f.Fund_Name,
+    f.Fund_Code,
     h.Estado AS EstadoInstrumento
 FROM sandbox.Homologacion_Instrumentos_Fondos hf
 INNER JOIN sandbox.Homologacion_Instrumentos h ON hf.ID_Homologacion = h.ID
@@ -211,7 +211,7 @@ PRINT ''
 PRINT '  [VISTA] Pendientes por fondo DESPUES:'
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Pendientes
 FROM sandbox.vw_Pendientes_Por_Fondo

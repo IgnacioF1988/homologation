@@ -49,13 +49,13 @@ DECLARE @Portfolio_AlturasII NVARCHAR(100) = 'ALTURAS II';
 -- Buscar ID_Fund de MLATHY
 SELECT @ID_Fund_MLATHY = ID_Fund
 FROM dimensionales.BD_Funds
-WHERE Fund_Name LIKE '%MLATHY%' OR Fund_Name LIKE '%MLathy%';
+WHERE Fund_Code LIKE '%MLATHY%' OR Fund_Code LIKE '%MLathy%';
 
 IF @ID_Fund_MLATHY IS NULL
 BEGIN
     PRINT 'ERROR: No se encontro fondo MLATHY en BD_Funds'
     PRINT 'Fondos disponibles:'
-    SELECT TOP 20 ID_Fund, Fund_Name FROM dimensionales.BD_Funds ORDER BY ID_Fund;
+    SELECT TOP 20 ID_Fund, Fund_Code FROM dimensionales.BD_Funds ORDER BY ID_Fund;
     RETURN;
 END
 
@@ -234,7 +234,7 @@ PRINT '  ---------------------------------'
 
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Pendientes
 FROM sandbox.vw_Pendientes_Por_Fondo
@@ -327,7 +327,7 @@ SELECT
     h.Instrumento,
     h.Source,
     hf.ID_Fund,
-    f.Fund_Name
+    f.Fund_Code
 FROM sandbox.Homologacion_Instrumentos_Fondos hf
 INNER JOIN sandbox.Homologacion_Instrumentos h ON hf.ID_Homologacion = h.ID
 LEFT JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund
@@ -355,7 +355,7 @@ SELECT
     h.Moneda,
     h.Source,
     hf.ID_Fund,
-    f.Fund_Name
+    f.Fund_Code
 FROM sandbox.Homologacion_Monedas_Fondos hf
 INNER JOIN sandbox.Homologacion_Monedas h ON hf.ID_Homologacion = h.ID
 LEFT JOIN dimensionales.BD_Funds f ON hf.ID_Fund = f.ID_Fund

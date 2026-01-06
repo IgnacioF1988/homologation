@@ -48,7 +48,7 @@ DECLARE @Portfolio_AlturasII NVARCHAR(100) = 'ALTURAS II';
 
 SELECT @ID_Fund_MLATHY = ID_Fund
 FROM dimensionales.BD_Funds
-WHERE Fund_Name LIKE '%MLATHY%' OR Fund_Name LIKE '%MLathy%';
+WHERE Fund_Code LIKE '%MLATHY%' OR Fund_Code LIKE '%MLathy%';
 
 -- Variables de salida
 DECLARE @ReturnCode INT, @ErrorMessage NVARCHAR(500);
@@ -68,7 +68,7 @@ PRINT ''
 PRINT '  Pendientes actuales por fondo:'
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Pendientes
 FROM sandbox.vw_Pendientes_Por_Fondo
@@ -193,7 +193,7 @@ PRINT ''
 PRINT '  Pendientes por fondo (DESPUES de re-validar):'
 SELECT
     ID_Fund,
-    Fund_Name AS Fondo,
+    Fund_Code AS Fondo,
     TipoHomologacion AS Tipo,
     CantidadPendiente AS Pendientes
 FROM sandbox.vw_Pendientes_Por_Fondo

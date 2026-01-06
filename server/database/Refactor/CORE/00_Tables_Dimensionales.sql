@@ -22,6 +22,8 @@ GO
 
 -- ============================================================================
 -- dimensionales.BD_Funds - Catalogo maestro de fondos
+-- NOTA: Esta tabla se sincroniza desde INTELIGENCIA_PRODUCTO_DEV
+--       Fund_Code es la columna principal para mostrar en vistas/reportes
 -- ============================================================================
 IF NOT EXISTS (SELECT 1 FROM sys.tables t
                INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -29,11 +31,13 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables t
 BEGIN
     CREATE TABLE [dimensionales].[BD_Funds] (
         ID_Fund INT PRIMARY KEY,
-        Fund_Name NVARCHAR(200) NOT NULL,
-        Fund_Code NVARCHAR(50) NULL,
-        id_CURR INT NULL,
-        FundType NVARCHAR(50) NULL,
-        IsActive BIT NOT NULL DEFAULT 1,
+        FundName NVARCHAR(MAX) NULL,              -- Nombre largo del fondo
+        FundShortName NVARCHAR(MAX) NULL,         -- Nombre corto
+        Fund_Code NVARCHAR(100) NULL,             -- Codigo para vistas/reportes
+        id_CURR NVARCHAR(10) NULL,
+        Estrategia_Cons_Fondo NVARCHAR(100) NULL,
+        Estrategia_Comparador NVARCHAR(100) NULL,
+        Activo_MantenedorFondos BIT NULL DEFAULT 1,
         FechaCreacion DATETIME DEFAULT GETDATE(),
         FechaModificacion DATETIME DEFAULT GETDATE()
     );
@@ -162,14 +166,16 @@ GO
 /*
 -- Poblar BD_Funds
 DELETE FROM dimensionales.BD_Funds;
-INSERT INTO dimensionales.BD_Funds (ID_Fund, Fund_Name, Fund_Code, id_CURR, FundType, IsActive)
+INSERT INTO dimensionales.BD_Funds (ID_Fund, FundName, FundShortName, Fund_Code, id_CURR, Estrategia_Cons_Fondo, Estrategia_Comparador, Activo_MantenedorFondos)
 SELECT
     ID_Fund,
-    ISNULL(FundName, FundShortName) AS Fund_Name,
-    FundShortName AS Fund_Code,
-    TRY_CAST(id_CURR AS INT) AS id_CURR,
-    Estrategia_Cons_Fondo AS FundType,
-    ISNULL(Activo_MantenedorFondos, 1) AS IsActive
+    FundName,
+    FundShortName,
+    ISNULL(Fund_Code, FundShortName) AS Fund_Code,
+    id_CURR,
+    Estrategia_Cons_Fondo,
+    Estrategia_Comparador,
+    ISNULL(Activo_MantenedorFondos, 1)
 FROM INTELIGENCIA_PRODUCTO_DEV.dimensionales.BD_Funds
 WHERE ID_Fund IS NOT NULL;
 
