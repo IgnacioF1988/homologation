@@ -368,10 +368,52 @@ PRINT '  [OK] sandbox.Alertas_Suciedades_IPA_Fondos';
 PRINT '';
 
 -- ============================================================================
--- PASO 6: FORZAR RECOMPILACION DEL SP
+-- PASO 6: INDICES EN TABLAS DIMENSIONALES (para lookups de homologacion)
 -- ============================================================================
 PRINT '------------------------------------------------------------------------';
-PRINT ' PASO 6: Forzar recompilacion del SP';
+PRINT ' PASO 6: Indices en tablas dimensionales para homologacion';
+PRINT '------------------------------------------------------------------------';
+
+-- HOMOL_Instrumentos - Indice para búsquedas por Source/SourceInvestment
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dimensionales.HOMOL_Instrumentos') AND name = 'IX_HOMOL_Instr_Source_SourceInv')
+BEGIN
+    CREATE NONCLUSTERED INDEX IX_HOMOL_Instr_Source_SourceInv
+    ON dimensionales.HOMOL_Instrumentos (Source, SourceInvestment)
+    INCLUDE (ID_Instrumento);
+    PRINT '  [OK] IX_HOMOL_Instr_Source_SourceInv creado';
+END
+ELSE
+    PRINT '  [SKIP] IX_HOMOL_Instr_Source_SourceInv ya existe';
+
+-- HOMOL_Funds - Indice para búsquedas por Source/Portfolio
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dimensionales.HOMOL_Funds') AND name = 'IX_HOMOL_Funds_Source_Portfolio')
+BEGIN
+    CREATE NONCLUSTERED INDEX IX_HOMOL_Funds_Source_Portfolio
+    ON dimensionales.HOMOL_Funds (Source, Portfolio)
+    INCLUDE (ID_Fund);
+    PRINT '  [OK] IX_HOMOL_Funds_Source_Portfolio creado';
+END
+ELSE
+    PRINT '  [SKIP] IX_HOMOL_Funds_Source_Portfolio ya existe';
+
+-- HOMOL_Monedas - Indice para búsquedas por Source/Name
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dimensionales.HOMOL_Monedas') AND name = 'IX_HOMOL_Monedas_Source_Name')
+BEGIN
+    CREATE NONCLUSTERED INDEX IX_HOMOL_Monedas_Source_Name
+    ON dimensionales.HOMOL_Monedas (Source, Name)
+    INCLUDE (id_CURR);
+    PRINT '  [OK] IX_HOMOL_Monedas_Source_Name creado';
+END
+ELSE
+    PRINT '  [SKIP] IX_HOMOL_Monedas_Source_Name ya existe';
+
+PRINT '';
+
+-- ============================================================================
+-- PASO 7: FORZAR RECOMPILACION DEL SP
+-- ============================================================================
+PRINT '------------------------------------------------------------------------';
+PRINT ' PASO 7: Forzar recompilacion del SP';
 PRINT '------------------------------------------------------------------------';
 
 EXEC sp_recompile 'staging.sp_ValidateFund';
@@ -390,6 +432,9 @@ PRINT '   - IX_SONA_Ejecucion_Fund_Fecha';
 PRINT '   - IX_Derivados_Ejecucion_Fund_Fecha (covering)';
 PRINT '   - IX_PosModRF_Ejecucion_Fund_Fecha';
 PRINT '   - Indices compuestos en tablas N:M';
+PRINT '   - IX_HOMOL_Instr_Source_SourceInv (homologacion)';
+PRINT '   - IX_HOMOL_Funds_Source_Portfolio (homologacion)';
+PRINT '   - IX_HOMOL_Monedas_Source_Name (homologacion)';
 PRINT '';
 PRINT ' Estadisticas creadas/actualizadas:';
 PRINT '   - Columnas de JOIN en tablas sandbox';

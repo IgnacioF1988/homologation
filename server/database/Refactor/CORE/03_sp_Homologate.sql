@@ -1,7 +1,17 @@
+USE INTELIGENCIA_PRODUCTO_FULLSTACK;
+GO
+
 /*
 ================================================================================
 SP: staging.sp_Homologate
+Version: v2.0 - Case Sensitive Collation
 ================================================================================
+CAMBIOS v2.0:
+  - BREAKING: Removido COLLATE DATABASE_DEFAULT de todos los JOINs
+  - Las columnas ahora usan Latin1_General_CS_AS consistentemente
+  - La tabla temporal #Homologacion usa collation CS_AS
+  - REQUISITO: Ejecutar 99_Migracion_Collation_CS.sql antes de este SP
+
 NOTA: Este SP tiene dos funciones:
 
 1. HOMOLOGACIÓN DE TEMP TABLES (##*_Work) - ACTIVO Y NECESARIO
@@ -17,7 +27,7 @@ IMPORTANTE: Este SP DEBE existir para que el pipeline funcione.
             Los INSERTs a sandbox probablemente no se ejecutan si sp_ValidateFund
             ya detectó y registró los problemas de homologación.
 
-Fecha revisión: 2026-01-06
+Fecha revisión: 2026-01-07
 ================================================================================
 
 Descripción:
@@ -37,7 +47,7 @@ Retorna:
   11 = HOMOLOGACION_MONEDAS
 
 Autor: Refactorización Pipeline IPA
-Fecha: 2026-01-02
+Fecha: 2026-01-07
 ================================================================================
 */
 
@@ -70,6 +80,7 @@ BEGIN
     BEGIN TRY
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 1: Crear tabla temporal de homologación
+        -- v2.0: Usar collation Case Sensitive para consistencia
         -- ═══════════════════════════════════════════════════════════════════
 
         IF OBJECT_ID('tempdb..#Homologacion') IS NOT NULL
@@ -77,9 +88,9 @@ BEGIN
 
         CREATE TABLE #Homologacion (
             RowID INT IDENTITY(1,1),
-            InvestID NVARCHAR(255),
-            Currency NVARCHAR(50),
-            Portfolio NVARCHAR(100),
+            InvestID NVARCHAR(255) COLLATE Latin1_General_CS_AS,
+            Currency NVARCHAR(50) COLLATE Latin1_General_CS_AS,
+            Portfolio NVARCHAR(100) COLLATE Latin1_General_CS_AS,
             ID_Fund_H INT,
             ID_Instrumento INT,
             id_CURR INT,
@@ -88,6 +99,7 @@ BEGIN
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 2: Extraer datos únicos y homologar con LEFT JOINs
+        -- v2.0: Sin COLLATE DATABASE_DEFAULT (todas las columnas son CS_AS)
         -- ═══════════════════════════════════════════════════════════════════
 
         SET @SQL = N'
@@ -105,13 +117,13 @@ BEGIN
             END
         FROM ' + @TempTableName + ' t
         LEFT JOIN dimensionales.HOMOL_Funds hf
-            ON t.' + QUOTENAME(@PortfolioColumn) + ' = hf.Portfolio COLLATE DATABASE_DEFAULT
+            ON t.' + QUOTENAME(@PortfolioColumn) + ' = hf.Portfolio
             AND hf.Source = @Source
         LEFT JOIN dimensionales.HOMOL_Instrumentos hi
-            ON t.' + QUOTENAME(@InvestIDColumn) + ' = hi.SourceInvestment COLLATE DATABASE_DEFAULT
+            ON t.' + QUOTENAME(@InvestIDColumn) + ' = hi.SourceInvestment
             AND hi.Source = @Source
         LEFT JOIN dimensionales.HOMOL_Monedas hm
-            ON t.' + QUOTENAME(@CurrencyColumn) + ' = hm.Name COLLATE DATABASE_DEFAULT
+            ON t.' + QUOTENAME(@CurrencyColumn) + ' = hm.Name
             AND hm.Source = @Source';
 
         EXEC sp_executesql @SQL,
@@ -182,6 +194,7 @@ BEGIN
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 5: Actualizar tabla original con IDs homologados (si no hay errores)
+        -- v2.0: Sin COLLATE DATABASE_DEFAULT
         -- ═══════════════════════════════════════════════════════════════════
 
         IF @ReturnCode = 0
@@ -194,8 +207,8 @@ BEGIN
                 t.PK2 = CAST(h.ID_Instrumento AS VARCHAR(10)) + ''-'' + CAST(h.id_CURR AS VARCHAR(10))
             FROM ' + @TempTableName + ' t
             INNER JOIN #Homologacion h
-                ON t.' + QUOTENAME(@InvestIDColumn) + ' = h.InvestID COLLATE DATABASE_DEFAULT
-                AND t.' + QUOTENAME(@CurrencyColumn) + ' = h.Currency COLLATE DATABASE_DEFAULT';
+                ON t.' + QUOTENAME(@InvestIDColumn) + ' = h.InvestID
+                AND t.' + QUOTENAME(@CurrencyColumn) + ' = h.Currency';
 
             EXEC sp_executesql @SQL;
 

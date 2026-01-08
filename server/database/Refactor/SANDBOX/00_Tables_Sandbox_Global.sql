@@ -88,8 +88,8 @@ GO
 -- ============================================================================
 CREATE TABLE sandbox.Homologacion_Instrumentos (
     ID BIGINT IDENTITY(1,1) PRIMARY KEY,
-    Instrumento NVARCHAR(100) NOT NULL,
-    Source NVARCHAR(50) NOT NULL,           -- GENEVA, DERIVADOS
+    Instrumento NVARCHAR(100) COLLATE Latin1_General_CS_AS NOT NULL,
+    Source NVARCHAR(50) COLLATE Latin1_General_CS_AS NOT NULL,  -- GENEVA, DERIVADOS
     Currency NVARCHAR(50) NULL,             -- Contexto adicional
     FechaDeteccion DATETIME NOT NULL DEFAULT GETDATE(),
     Estado NVARCHAR(20) NOT NULL DEFAULT 'Pendiente',  -- Pendiente, Ok
@@ -134,8 +134,8 @@ GO
 -- ============================================================================
 CREATE TABLE sandbox.Homologacion_Monedas (
     ID BIGINT IDENTITY(1,1) PRIMARY KEY,
-    Moneda NVARCHAR(50) NOT NULL,
-    Source NVARCHAR(50) NOT NULL,
+    Moneda NVARCHAR(50) COLLATE Latin1_General_CS_AS NOT NULL,
+    Source NVARCHAR(50) COLLATE Latin1_General_CS_AS NOT NULL,
     FechaDeteccion DATETIME NOT NULL DEFAULT GETDATE(),
     Estado NVARCHAR(20) NOT NULL DEFAULT 'Pendiente',
     Usuario NVARCHAR(100) NULL,
@@ -180,8 +180,8 @@ GO
 -- ============================================================================
 CREATE TABLE sandbox.Homologacion_Fondos (
     ID BIGINT IDENTITY(1,1) PRIMARY KEY,
-    NombreFondo NVARCHAR(100) NOT NULL,     -- Portfolio Geneva sin homologar
-    Source NVARCHAR(50) NOT NULL,
+    NombreFondo NVARCHAR(100) COLLATE Latin1_General_CS_AS NOT NULL,  -- Portfolio Geneva sin homologar
+    Source NVARCHAR(50) COLLATE Latin1_General_CS_AS NOT NULL,
     FechaDeteccion DATETIME NOT NULL DEFAULT GETDATE(),
     Estado NVARCHAR(20) NOT NULL DEFAULT 'Pendiente',
     Usuario NVARCHAR(100) NULL,
@@ -227,7 +227,7 @@ GO
 -- ============================================================================
 CREATE TABLE sandbox.Alertas_Suciedades_IPA (
     ID BIGINT IDENTITY(1,1) PRIMARY KEY,
-    InvestID NVARCHAR(100) NOT NULL,
+    InvestID NVARCHAR(100) COLLATE Latin1_General_CS_AS NOT NULL,
     InvestDescription NVARCHAR(500) NULL,
     Qty DECIMAL(28,10) NULL,
     MVBook DECIMAL(28,10) NULL,

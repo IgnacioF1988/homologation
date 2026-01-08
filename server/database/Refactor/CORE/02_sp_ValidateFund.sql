@@ -4,10 +4,12 @@ GO
 /*
 ================================================================================
 SP: staging.sp_ValidateFund
-Version: v6.9 - Fix duplicados en re-ejecuciones
-
-Descripcion: Ejecuta TODAS las validaciones y registra TODOS los problemas
-             en sandbox (estructura N:M) y en logs.Validaciones_Ejecucion.
+Version: v7.0 - Case Sensitive Collation Compatible
+================================================================================
+CAMBIOS v7.0:
+  - Compatible con Latin1_General_CS_AS en todas las tablas
+  - Los JOINs ahora son Case Sensitive (no requieren COLLATE explicito)
+  - REQUISITO: Ejecutar 99_Migracion_Collation_CS.sql antes de este SP
 
 Cambios v6.9:
   - FIX: Cambiar INSERT a MERGE en sandbox.Alertas_Extract_Faltante
@@ -18,34 +20,15 @@ Cambios v6.9:
 Cambios v6.8:
   - CONFIG: Umbral de suciedad ahora usa config.fn_GetUmbralSuciedad(@ID_Fund)
             Permite configurar umbrales por fondo via config.Umbrales_Suciedades
-  - REQUISITO: Ejecutar 00_Config_Requisitos.sql para crear tabla y funcion
 
 Cambios v6.7:
   - PERF: Cambiado de MIN_GRANT_PERCENT/MAX_GRANT_PERCENT a RECOMPILE
-          RECOMPILE asegura que SQL Server use estadisticas actuales
-          al compilar cada query (optimo con indices covering nuevos)
-  - REQUISITO: Ejecutar 99_Optimizacion_Definitiva.sql antes
 
 Cambios v6.6:
   - FIX: Parametro @FechaReporte cambiado de NVARCHAR(10) a DATE
 
-Cambios v6.5:
-  - PERF: Hints de memory grant (reemplazados en v6.7)
-
-Cambios v6.4:
-  - PERF: Hints iniciales solo en Instrumentos y Monedas
-
 Cambios v6.3:
   - FIX: Deduplicar suciedades usando CAST a DECIMAL(28,10) + ROW_NUMBER
-         para evitar duplicate key cuando FLOAT se convierte a la precision de destino
-
-Cambios v6.1/v6.2:
-  - Tablas sandbox globales sin ID_Ejecucion
-  - Estructura N:M: tabla principal + tabla de relacion con fondos
-  - MERGE para insertar items nuevos (o agregar relacion con fondo)
-  - Items con Estado='Ok' no se reportan como pendientes
-  - Conteo de pendientes especifico por fondo
-  - FIX: ROW_NUMBER para eliminar duplicados (Instrumento,Source) con diferentes Currency
 
 Arquitectura Sandbox:
   - Homologacion_Instrumentos (unico por Instrumento+Source)
@@ -68,7 +51,7 @@ Codigos de retorno:
   13-18 = EXTRACT_*_FALTANTE
 
 Autor: Refactorizacion Pipeline IPA
-Fecha: 2026-01-05
+Fecha: 2026-01-07
 ================================================================================
 */
 
@@ -76,7 +59,7 @@ CREATE OR ALTER PROCEDURE [staging].[sp_ValidateFund]
     @ID_Ejecucion BIGINT,
     @ID_Proceso BIGINT,
     @ID_Fund INT,
-    @FechaReporte DATE,  -- v6.6: Cambiado de NVARCHAR(10) a DATE para evitar CONVERT implicito
+    @FechaReporte DATE,
     @Source NVARCHAR(50) = 'GENEVA',
     -- Outputs
     @ErrorMessage NVARCHAR(500) OUTPUT,
@@ -106,7 +89,7 @@ BEGIN
     SET @HomolMonedasCount = 0;
 
     DECLARE @MostCriticalCode INT = 0;
-    DECLARE @UmbralSuciedad DECIMAL(18,6) = config.fn_GetUmbralSuciedad(@ID_Fund);  -- v6.8: Configurable por fondo
+    DECLARE @UmbralSuciedad DECIMAL(18,6) = config.fn_GetUmbralSuciedad(@ID_Fund);
     DECLARE @ErrorMessages NVARCHAR(MAX) = '';
     DECLARE @ErrorCount INT = 0;
     DECLARE @RegistrosPosModRF INT = 0;
@@ -120,13 +103,13 @@ BEGIN
     DECLARE @SourceGeneva NVARCHAR(50);
     DECLARE @SourceDerivados NVARCHAR(50);
 
-    PRINT '════════════════════════════════════════════════════════════════';
-    PRINT 'sp_ValidateFund v6.9: INICIO (Fix duplicados)';
+    PRINT '----------------------------------------------------------------';
+    PRINT 'sp_ValidateFund v7.0: INICIO (Case Sensitive)';
     PRINT 'ID_Ejecucion: ' + CAST(@ID_Ejecucion AS NVARCHAR(20));
     PRINT 'ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
     PRINT 'FechaReporte: ' + CONVERT(NVARCHAR(10), @FechaReporte, 120);
     PRINT 'UmbralSuciedad: ' + CAST(@UmbralSuciedad AS NVARCHAR(20));
-    PRINT '════════════════════════════════════════════════════════════════';
+    PRINT '----------------------------------------------------------------';
 
     BEGIN TRY
         -- =====================================================================
@@ -186,7 +169,6 @@ BEGIN
             SET @ErrorMessages = @ErrorMessages + 'IPA_FALTANTE; ';
             IF @MostCriticalCode = 0 SET @MostCriticalCode = 13;
 
-            -- MERGE para evitar duplicados en re-ejecuciones (v6.9)
             MERGE sandbox.Alertas_Extract_Faltante AS target
             USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte, 'IPA' AS TipoReporte) AS source
             ON target.ID_Ejecucion = source.ID_Ejecucion AND target.ID_Fund = source.ID_Fund
@@ -347,13 +329,11 @@ BEGIN
 
         -- =====================================================================
         -- VALIDACION 2: Homologacion de Fondos (N:M Global)
-        -- Busca en HOMOL_Funds por (Portfolio, Source)
-        -- Si no existe y Estado != 'Ok', registra en sandbox
+        -- v7.0: JOINs son Case Sensitive nativamente
         -- =====================================================================
         PRINT '';
         PRINT '  Validando homologacion de fondos...';
 
-        -- Temp table para fondos sin homologar de esta ejecucion
         DROP TABLE IF EXISTS #FondosSinHomologar;
 
         SELECT DISTINCT
@@ -380,22 +360,24 @@ BEGIN
           AND d.FechaReporte = @FechaReporte
           AND d.ID_Fund = @ID_Fund
           AND hf.HOMOL_Fund_ID IS NULL
-        OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
+        OPTION (RECOMPILE);
 
-        -- Insertar en tabla principal (solo si no existe o Estado != 'Ok')
+        -- v7.0: COLLATE necesario porque temp tables heredan CI_AS de tempdb
         MERGE sandbox.Homologacion_Fondos AS target
         USING #FondosSinHomologar AS source
-        ON target.NombreFondo = source.NombreFondo AND target.Source = source.Source
+        ON target.NombreFondo = source.NombreFondo COLLATE Latin1_General_CS_AS
+           AND target.Source = source.Source COLLATE Latin1_General_CS_AS
         WHEN NOT MATCHED THEN
             INSERT (NombreFondo, Source, FechaDeteccion, Estado)
             VALUES (source.NombreFondo, source.Source, GETDATE(), 'Pendiente');
 
-        -- Insertar relacion con fondo usando MERGE (evita race condition en paralelo) v6.9
         MERGE sandbox.Homologacion_Fondos_Fondos AS target
         USING (
             SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
             FROM sandbox.Homologacion_Fondos h
-            INNER JOIN #FondosSinHomologar f ON h.NombreFondo = f.NombreFondo AND h.Source = f.Source
+            INNER JOIN #FondosSinHomologar f
+                ON h.NombreFondo = f.NombreFondo COLLATE Latin1_General_CS_AS
+                AND h.Source = f.Source COLLATE Latin1_General_CS_AS
             WHERE h.Estado = 'Pendiente'
         ) AS source
         ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
@@ -403,11 +385,12 @@ BEGIN
             INSERT (ID_Homologacion, ID_Fund)
             VALUES (source.ID_Homologacion, source.ID_Fund);
 
-        -- Contar PENDIENTES para este fondo especificamente
         SELECT @HomolFondosCount = COUNT(*)
         FROM sandbox.Homologacion_Fondos h
         INNER JOIN sandbox.Homologacion_Fondos_Fondos hf ON h.ID = hf.ID_Homologacion
-        INNER JOIN #FondosSinHomologar f ON h.NombreFondo = f.NombreFondo AND h.Source = f.Source
+        INNER JOIN #FondosSinHomologar f
+            ON h.NombreFondo = f.NombreFondo COLLATE Latin1_General_CS_AS
+            AND h.Source = f.Source COLLATE Latin1_General_CS_AS
         WHERE hf.ID_Fund = @ID_Fund AND h.Estado = 'Pendiente';
 
         DROP TABLE #FondosSinHomologar;
@@ -430,14 +413,9 @@ BEGIN
 
         -- =====================================================================
         -- VALIDACION 3: Calidad de datos IPA - Suciedades (N:M Global)
-        -- FIX v6.3: Deduplicar basado en DECIMAL(28,10) para evitar duplicate key
-        --           ya que la tabla destino usa esa precision
         -- =====================================================================
         IF @RegistrosIPA > 0
         BEGIN
-            -- Temp table para suciedades de esta ejecucion
-            -- FIX v6.3: Convertir a DECIMAL(28,10) y deduplicar con ROW_NUMBER
-            --           porque la tabla destino usa esa precision
             DROP TABLE IF EXISTS #SuciedadesDetectadas;
 
             ;WITH SuciedadesRaw AS (
@@ -462,12 +440,10 @@ BEGIN
             INTO #SuciedadesDetectadas
             FROM SuciedadesRaw
             WHERE rn = 1
-            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
+            OPTION (RECOMPILE);
 
             IF EXISTS (SELECT 1 FROM #SuciedadesDetectadas)
             BEGIN
-                -- Insertar en tabla principal (solo si no existe)
-                -- FIX v6.3: Datos ya convertidos a DECIMAL(28,10) y deduplicados
                 MERGE sandbox.Alertas_Suciedades_IPA AS target
                 USING #SuciedadesDetectadas AS source
                 ON target.InvestID = source.InvestID
@@ -477,7 +453,6 @@ BEGIN
                     INSERT (InvestID, InvestDescription, Qty, MVBook, AI, FechaDeteccion, Estado)
                     VALUES (source.InvestID, source.InvestDescription, source.Qty, source.MVBook, source.AI, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
                 MERGE sandbox.Alertas_Suciedades_IPA_Fondos AS target
                 USING (
                     SELECT DISTINCT s.ID AS ID_Suciedad, @ID_Fund AS ID_Fund
@@ -493,7 +468,6 @@ BEGIN
                     INSERT (ID_Suciedad, ID_Fund)
                     VALUES (source.ID_Suciedad, source.ID_Fund);
 
-                -- Contar PENDIENTES para este fondo
                 SELECT @SuciedadesCount = COUNT(*)
                 FROM sandbox.Alertas_Suciedades_IPA s
                 INNER JOIN sandbox.Alertas_Suciedades_IPA_Fondos sf ON s.ID = sf.ID_Suciedad
@@ -527,14 +501,12 @@ BEGIN
 
         -- =====================================================================
         -- VALIDACION 4: Homologacion Instrumentos (N:M Global)
-        -- Incluye IPA + PNL + CAPM + Derivados
-        -- FIX v6.1: Use ROW_NUMBER to get unique Instrumento+Source
+        -- v7.0: JOINs son Case Sensitive nativamente
         -- =====================================================================
         IF @RegistrosIPA > 0 OR @RegistrosPNL > 0 OR @RegistrosCAPM > 0 OR @RegistrosDerivados > 0
         BEGIN
             DROP TABLE IF EXISTS #InstrumentosSinHomologar;
 
-            -- Use CTE with ROW_NUMBER to eliminate duplicates per Instrumento+Source
             ;WITH InstrumentosRaw AS (
                 -- De IPA (Source: GENEVA)
                 SELECT ipa.InvestID AS Instrumento, ipa.LocalCurrency AS Currency, @SourceGeneva AS Source
@@ -595,24 +567,26 @@ BEGIN
             INTO #InstrumentosSinHomologar
             FROM InstrumentosRanked
             WHERE rn = 1
-            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
+            OPTION (RECOMPILE);
 
             IF EXISTS (SELECT 1 FROM #InstrumentosSinHomologar)
             BEGIN
-                -- Insertar en tabla principal (solo si no existe)
+                -- v7.0: COLLATE necesario porque temp tables heredan CI_AS de tempdb
                 MERGE sandbox.Homologacion_Instrumentos AS target
                 USING #InstrumentosSinHomologar AS source
-                ON target.Instrumento = source.Instrumento AND target.Source = source.Source
+                ON target.Instrumento = source.Instrumento COLLATE Latin1_General_CS_AS
+                   AND target.Source = source.Source COLLATE Latin1_General_CS_AS
                 WHEN NOT MATCHED THEN
                     INSERT (Instrumento, Source, Currency, FechaDeteccion, Estado)
                     VALUES (source.Instrumento, source.Source, source.Currency, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
                 MERGE sandbox.Homologacion_Instrumentos_Fondos AS target
                 USING (
                     SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
                     FROM sandbox.Homologacion_Instrumentos h
-                    INNER JOIN #InstrumentosSinHomologar i ON h.Instrumento = i.Instrumento AND h.Source = i.Source
+                    INNER JOIN #InstrumentosSinHomologar i
+                        ON h.Instrumento = i.Instrumento COLLATE Latin1_General_CS_AS
+                        AND h.Source = i.Source COLLATE Latin1_General_CS_AS
                     WHERE h.Estado = 'Pendiente'
                 ) AS source
                 ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
@@ -620,11 +594,12 @@ BEGIN
                     INSERT (ID_Homologacion, ID_Fund)
                     VALUES (source.ID_Homologacion, source.ID_Fund);
 
-                -- Contar PENDIENTES para este fondo
                 SELECT @HomolInstrumentosCount = COUNT(*)
                 FROM sandbox.Homologacion_Instrumentos h
                 INNER JOIN sandbox.Homologacion_Instrumentos_Fondos hf ON h.ID = hf.ID_Homologacion
-                INNER JOIN #InstrumentosSinHomologar i ON h.Instrumento = i.Instrumento AND h.Source = i.Source
+                INNER JOIN #InstrumentosSinHomologar i
+                    ON h.Instrumento = i.Instrumento COLLATE Latin1_General_CS_AS
+                    AND h.Source = i.Source COLLATE Latin1_General_CS_AS
                 WHERE hf.ID_Fund = @ID_Fund AND h.Estado = 'Pendiente';
             END
 
@@ -648,14 +623,13 @@ BEGIN
 
             -- =====================================================================
             -- VALIDACION 5: Homologacion Monedas (N:M Global)
-            -- Incluye IPA + PNL + CAPM + Derivados
+            -- v7.0: JOINs son Case Sensitive nativamente
             -- =====================================================================
             DROP TABLE IF EXISTS #MonedasSinHomologar;
 
             SELECT DISTINCT Moneda, Source
             INTO #MonedasSinHomologar
             FROM (
-                -- De IPA (Source: GENEVA)
                 SELECT ipa.LocalCurrency AS Moneda, @SourceGeneva AS Source
                 FROM extract.IPA ipa WITH (NOLOCK)
                 LEFT JOIN dimensionales.HOMOL_Monedas hm
@@ -668,7 +642,6 @@ BEGIN
 
                 UNION
 
-                -- De PNL (Source: GENEVA)
                 SELECT pnl.Currency AS Moneda, @SourceGeneva AS Source
                 FROM extract.PNL pnl WITH (NOLOCK)
                 LEFT JOIN dimensionales.HOMOL_Monedas hm
@@ -681,7 +654,6 @@ BEGIN
 
                 UNION
 
-                -- De CAPM (Source: GENEVA)
                 SELECT capm.LocalCurrency AS Moneda, @SourceGeneva AS Source
                 FROM extract.CAPM capm WITH (NOLOCK)
                 LEFT JOIN dimensionales.HOMOL_Monedas hm
@@ -694,7 +666,6 @@ BEGIN
 
                 UNION
 
-                -- De Derivados - Pata Larga (Source: DERIVADOS)
                 SELECT deriv.Moneda_PLarga AS Moneda, @SourceDerivados AS Source
                 FROM extract.Derivados deriv WITH (NOLOCK)
                 LEFT JOIN dimensionales.HOMOL_Monedas hm
@@ -707,7 +678,6 @@ BEGIN
 
                 UNION
 
-                -- De Derivados - Pata Corta (Source: DERIVADOS)
                 SELECT deriv.Moneda_PCorta AS Moneda, @SourceDerivados AS Source
                 FROM extract.Derivados deriv WITH (NOLOCK)
                 LEFT JOIN dimensionales.HOMOL_Monedas hm
@@ -718,24 +688,26 @@ BEGIN
                   AND hm.id_CURR IS NULL
                   AND deriv.Moneda_PCorta IS NOT NULL
             ) src
-            OPTION (RECOMPILE);  -- v6.7: Usa estadisticas actuales con indices covering
+            OPTION (RECOMPILE);
 
             IF EXISTS (SELECT 1 FROM #MonedasSinHomologar)
             BEGIN
-                -- Insertar en tabla principal (solo si no existe)
+                -- v7.0: COLLATE necesario porque temp tables heredan CI_AS de tempdb
                 MERGE sandbox.Homologacion_Monedas AS target
                 USING #MonedasSinHomologar AS source
-                ON target.Moneda = source.Moneda AND target.Source = source.Source
+                ON target.Moneda = source.Moneda COLLATE Latin1_General_CS_AS
+                   AND target.Source = source.Source COLLATE Latin1_General_CS_AS
                 WHEN NOT MATCHED THEN
                     INSERT (Moneda, Source, FechaDeteccion, Estado)
                     VALUES (source.Moneda, source.Source, GETDATE(), 'Pendiente');
 
-                -- Insertar relacion con fondo usando MERGE (evita race condition) v6.9
                 MERGE sandbox.Homologacion_Monedas_Fondos AS target
                 USING (
                     SELECT DISTINCT h.ID AS ID_Homologacion, @ID_Fund AS ID_Fund
                     FROM sandbox.Homologacion_Monedas h
-                    INNER JOIN #MonedasSinHomologar m ON h.Moneda = m.Moneda AND h.Source = m.Source
+                    INNER JOIN #MonedasSinHomologar m
+                        ON h.Moneda = m.Moneda COLLATE Latin1_General_CS_AS
+                        AND h.Source = m.Source COLLATE Latin1_General_CS_AS
                     WHERE h.Estado = 'Pendiente'
                 ) AS source
                 ON target.ID_Homologacion = source.ID_Homologacion AND target.ID_Fund = source.ID_Fund
@@ -743,11 +715,12 @@ BEGIN
                     INSERT (ID_Homologacion, ID_Fund)
                     VALUES (source.ID_Homologacion, source.ID_Fund);
 
-                -- Contar PENDIENTES para este fondo
                 SELECT @HomolMonedasCount = COUNT(*)
                 FROM sandbox.Homologacion_Monedas h
                 INNER JOIN sandbox.Homologacion_Monedas_Fondos hf ON h.ID = hf.ID_Homologacion
-                INNER JOIN #MonedasSinHomologar m ON h.Moneda = m.Moneda AND h.Source = m.Source
+                INNER JOIN #MonedasSinHomologar m
+                    ON h.Moneda = m.Moneda COLLATE Latin1_General_CS_AS
+                    AND h.Source = m.Source COLLATE Latin1_General_CS_AS
                 WHERE hf.ID_Fund = @ID_Fund AND h.Estado = 'Pendiente';
             END
 
@@ -773,7 +746,7 @@ BEGIN
         -- =====================================================================
         -- RESUMEN Y RETORNO
         -- =====================================================================
-        PRINT '════════════════════════════════════════════════════════════════';
+        PRINT '----------------------------------------------------------------';
         IF @ErrorCount = 0
         BEGIN
             PRINT 'sp_ValidateFund: OK - Sin errores';
@@ -791,7 +764,7 @@ BEGIN
             PRINT 'sp_ValidateFund: ' + CAST(@ErrorCount AS NVARCHAR(10)) + ' errores';
             PRINT 'Errores: ' + @ErrorMessages;
             PRINT 'Codigo: ' + CAST(@MostCriticalCode AS NVARCHAR(10));
-            PRINT '════════════════════════════════════════════════════════════════';
+            PRINT '----------------------------------------------------------------';
 
             SET @ErrorMessage = @ErrorMessages;
             RETURN @MostCriticalCode;
