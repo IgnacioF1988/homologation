@@ -1,24 +1,35 @@
 /*
 ================================================================================
 SP: staging.sp_Process_Derivados
+Version: v2.0 - Redesign DB-Centric (descuadres validados en ValidateFund)
+================================================================================
 Descripción: Procesa datos de Derivados.
              - Carga extract.Derivados con UNPIVOT posiciones larga/corta
              - Homologa instrumentos y monedas
-             - Valida DESCUADRE: SUM(##IPA_MTM.MVBook) vs SUM(Derivados.MTM)
              - Valida PARIDAD: SUM(MTM) vs SUM(TotalMVal) por moneda
              - Crea ajustes en ##Ajustes
+
+PRINCIPIO FUNDAMENTAL:
+  Si sp_ValidateFund pasó, este SP NO DEBE fallar por validaciones de negocio.
+  Cualquier falla aquí es un BUG del sistema (ASSERTION_FAILED).
 
 Prerequisito: sp_Process_IPA debe haber completado
 
 Códigos de retorno:
   0  = OK
-  1  = WARNING (sin datos Derivados)
-  2  = RETRY
-  3  = ERROR_CRITICO
-  8  = DESCUADRES_DERIVADOS
+  1  = WARNING (sin datos Derivados, OK si fondo no requiere Derivados)
+  3  = ERROR_CRITICO (exception no esperada)
+  4  = ASSERTION_FAILED (bug del sistema - prerequisitos no cumplidos)
+
+NOTA: El código 8 (DESCUADRES_DERIVADOS) fue movido a sp_ValidateFund FASE 4.
+
+CHECKPOINT Events emitidos:
+  - VERIFIED ##IPA_MTM (prerequisito validado)
+  - CREATED ##Derivados_Work (después de cargar datos)
 
 Autor: Refactorización Pipeline IPA
 Fecha: 2026-01-02
+Modificado: 2026-01-09 - Redesign v2.0 con CHECKPOINT events
 ================================================================================
 */
 
@@ -80,13 +91,53 @@ BEGIN
 
     BEGIN TRY
         -- ═══════════════════════════════════════════════════════════════════
-        -- PASO 0: Validaciones previas
+        -- EVENTO: SP_INICIO
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_INICIO',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_Derivados';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- PASO 0: ASSERTION - Verificar prerequisitos
+        -- Si ValidateFund pasó, ##IPA_MTM DEBE existir. Si no existe, es un BUG.
         -- ═══════════════════════════════════════════════════════════════════
 
-        -- Verificar que existe ##IPA_MTM
-        SET @SQL = N'IF OBJECT_ID(''tempdb..' + @TempIPA_MTM + ''', ''U'') IS NULL
-                     RAISERROR(''Tabla ' + @TempIPA_MTM + ' no existe. Ejecutar sp_Process_IPA primero.'', 16, 1)';
-        EXEC sp_executesql @SQL;
+        DECLARE @IPAMTMExists BIT = 0;
+        SET @SQL = N'IF OBJECT_ID(''tempdb..' + @TempIPA_MTM + ''', ''U'') IS NOT NULL SET @Exists = 1';
+        EXEC sp_executesql @SQL, N'@Exists BIT OUTPUT', @IPAMTMExists OUTPUT;
+
+        IF @IPAMTMExists = 0
+        BEGIN
+            -- ASSERTION_FAILED: Esto es un BUG, no debería pasar si ValidateFund pasó
+            DECLARE @AssertMsg NVARCHAR(500) = 'ASSERTION_FAILED: Tabla ' + @TempIPA_MTM + ' no existe. Bug en orquestador o sp_Process_IPA falló silenciosamente.';
+            PRINT @AssertMsg;
+
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'ERROR',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_Derivados',
+                @CodigoRetorno = 4,
+                @Detalles = @AssertMsg;
+
+            RETURN 4;  -- ASSERTION_FAILED
+        END
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- CHECKPOINT: ##IPA_MTM verificada (prerequisito OK)
+        -- ═══════════════════════════════════════════════════════════════════
+        DECLARE @ChkVerified NVARCHAR(500) = '{"operacion": "VERIFIED", "objeto": "' + @TempIPA_MTM + '", "mensaje": "Prerequisito IPA MTM existe"}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_Derivados',
+            @Detalles = @ChkVerified;
 
         -- Obtener umbrales configurados
         SET @UmbralDescuadre = staging.fn_GetUmbral(@ID_Fund, 'DERIVADOS');
@@ -258,10 +309,33 @@ BEGIN
             PRINT 'sp_Process_Derivados: Sin datos de Derivados para el fondo';
             IF @TotalIPA_MTM != 0
                 PRINT 'WARNING: Hay MTM en IPA pero no hay datos de Derivados';
+
+            -- EVENTO: SP_FIN (WARNING - sin datos Derivados)
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'SP_FIN',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_Derivados',
+                @CodigoRetorno = 1,
+                @Detalles = 'WARNING: Sin datos de Derivados para el fondo';
+
             RETURN 1;  -- WARNING
         END
 
         PRINT 'sp_Process_Derivados: ' + CAST(@RowsProcessed AS NVARCHAR(10)) + ' registros Derivados cargados';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- CHECKPOINT: ##Derivados_Work creada
+        -- ═══════════════════════════════════════════════════════════════════
+        DECLARE @ChkCreated NVARCHAR(500) = '{"operacion": "CREATED", "objeto": "' + @TempDerivados + '", "registros": ' + CAST(@RowsProcessed AS NVARCHAR(10)) + '}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_Derivados',
+            @Detalles = @ChkCreated;
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 4: Homologar instrumentos y monedas
@@ -284,7 +358,23 @@ BEGIN
         IF @ReturnCode != 0
         BEGIN
             SET @ErrorCount = 1;
-            RETURN @ReturnCode;
+
+            -- ASSERTION_FAILED: La homologación debió pasar en sp_ValidateFund
+            -- Si llegamos aquí con errores de homologación, es un BUG del sistema
+            DECLARE @AssertMsgHomol NVARCHAR(500) = 'ASSERTION_FAILED: Homologación falló en sp_Process_Derivados pero sp_ValidateFund retornó 0. ' +
+                                                     'Fondo:' + CAST(ISNULL(@ProblemasFondo,0) AS NVARCHAR) +
+                                                     ' Instrumento:' + CAST(ISNULL(@ProblemasInstrumento,0) AS NVARCHAR) +
+                                                     ' Moneda:' + CAST(ISNULL(@ProblemasMoneda,0) AS NVARCHAR);
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'ERROR',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_Derivados',
+                @CodigoRetorno = 4,  -- ASSERTION_FAILED
+                @Detalles = @AssertMsgHomol;
+
+            RETURN 4;  -- ASSERTION_FAILED
         END
 
         -- Actualizar ID_Fund
@@ -292,7 +382,7 @@ BEGIN
         EXEC sp_executesql @SQL, N'@ID_Fund INT', @ID_Fund;
 
         -- ═══════════════════════════════════════════════════════════════════
-        -- PASO 5: Validar DESCUADRE (IPA_MTM vs Derivados)
+        -- PASO 5: Calcular totales (descuadre ya validado en ValidateFund FASE 4)
         -- ═══════════════════════════════════════════════════════════════════
 
         SET @SQL = N'SELECT @Total = ISNULL(SUM(MTM), 0) FROM ' + @TempDerivados;
@@ -303,33 +393,10 @@ BEGIN
         PRINT 'sp_Process_Derivados: Total Derivados MTM = ' + CAST(@TotalDerivados_MTM AS NVARCHAR(20));
         PRINT 'sp_Process_Derivados: Diferencia Descuadre = ' + CAST(@DiferenciaDescuadre AS NVARCHAR(20));
 
-        IF ABS(@DiferenciaDescuadre) > @UmbralDescuadre
-        BEGIN
-            -- Descuadre excede umbral → Stand-by
-            PRINT 'ERROR: Descuadre Derivados excede umbral (' + CAST(@UmbralDescuadre AS NVARCHAR(10)) + ')';
+        -- NOTA: La validación de descuadre vs umbral fue movida a sp_ValidateFund FASE 4.
+        -- Si llegamos aquí, ValidateFund ya validó que la diferencia está dentro del umbral.
 
-            -- MERGE para evitar duplicados en re-ejecuciones
-            MERGE sandbox.Alertas_Descuadre_Derivados AS target
-            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte) AS source
-            ON target.ID_Ejecucion = source.ID_Ejecucion
-               AND target.ID_Fund = source.ID_Fund
-               AND target.FechaReporte = source.FechaReporte
-            WHEN MATCHED THEN
-                UPDATE SET
-                    MVBook_IPA = @TotalIPA_MTM,
-                    MTM_Derivados = @TotalDerivados_MTM,
-                    Diferencia = @DiferenciaDescuadre,
-                    UmbralAplicado = @UmbralDescuadre,
-                    FechaProceso = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, Portfolio, MVBook_IPA, MTM_Derivados, Diferencia, UmbralAplicado, FechaProceso)
-                VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio, @TotalIPA_MTM, @TotalDerivados_MTM, @DiferenciaDescuadre, @UmbralDescuadre, GETDATE());
-
-            SET @ErrorCount = 1;
-            RETURN 8;  -- DESCUADRES_DERIVADOS
-        END
-
-        -- Crear ajuste de descuadre si hay diferencia
+        -- Crear ajuste de descuadre si hay diferencia (ya validada dentro del umbral)
         IF ABS(@DiferenciaDescuadre) > 0.01
         BEGIN
             EXEC staging.sp_CreateAdjustment
@@ -408,6 +475,8 @@ BEGIN
         -- RESUMEN
         -- ═══════════════════════════════════════════════════════════════════
 
+        DECLARE @DuracionMs INT = DATEDIFF(second, @StartTime, GETDATE()) * 1000;
+
         PRINT '========================================';
         PRINT 'sp_Process_Derivados COMPLETADO';
         PRINT 'Fondo: ' + CAST(@ID_Fund AS NVARCHAR(10));
@@ -416,14 +485,38 @@ BEGIN
         PRINT 'Total Derivados MTM: ' + CAST(@TotalDerivados_MTM AS NVARCHAR(20));
         PRINT 'Diferencia Descuadre: ' + CAST(@DiferenciaDescuadre AS NVARCHAR(20));
         PRINT 'Ajustes creados: ' + CAST(@AjustesCreados AS NVARCHAR(10));
-        PRINT 'Tiempo: ' + CAST(DATEDIFF(MILLISECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' ms';
+        PRINT 'Tiempo: ' + CAST(@DuracionMs AS NVARCHAR(10)) + ' ms';
         PRINT '========================================';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- EVENTO: SP_FIN (Exitoso)
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_FIN',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_Derivados',
+            @CodigoRetorno = 0,
+            @DuracionMs = @DuracionMs,
+            @RowsProcessed = @RowsProcessed;
 
         RETURN 0;  -- OK
 
     END TRY
     BEGIN CATCH
         SET @ErrorCount = 1;
+
+        -- EVENTO: ERROR
+        DECLARE @ErrorMsg NVARCHAR(4000) = ERROR_MESSAGE();
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'ERROR',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_Derivados',
+            @CodigoRetorno = 3,
+            @Detalles = @ErrorMsg;
 
         EXEC staging.sp_HandleError
             @ProcName = 'sp_Process_Derivados',

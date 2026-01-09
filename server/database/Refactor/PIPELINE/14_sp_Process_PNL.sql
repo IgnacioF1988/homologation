@@ -1,24 +1,31 @@
 /*
 ================================================================================
 SP: staging.sp_Process_PNL
+Version: v2.0 - Redesign DB-Centric con CHECKPOINT events
+================================================================================
 Descripción: Procesa datos de PNL (Profit & Loss).
              - Carga extract.PNL → ##PNL_Work
              - Homologa instrumentos y monedas
              - Prepara datos para JOIN con IPA en consolidación
 
-Prerequisito: sp_Process_IPA debe haber completado
+PRINCIPIO FUNDAMENTAL:
+  Si sp_ValidateFund pasó, este SP NO DEBE fallar por validaciones de negocio.
+  Cualquier falla aquí es un BUG del sistema (ASSERTION_FAILED).
+
+CHECKPOINT Events emitidos:
+  - CREATED ##PNL_Work (después de cargar datos)
+
+Prerequisito: sp_ValidateFund debe haber retornado 0
 
 Códigos de retorno:
   0  = OK
-  1  = WARNING (sin datos PNL)
-  2  = RETRY
-  3  = ERROR_CRITICO
-  6  = HOMOLOGACION_INSTRUMENTOS
-  10 = HOMOLOGACION_FONDOS
-  11 = HOMOLOGACION_MONEDAS
+  1  = WARNING (sin datos PNL, OK si fondo no requiere PNL)
+  3  = ERROR_CRITICO (exception)
+  4  = ASSERTION_FAILED (bug - homologación debió pasar en ValidateFund)
 
 Autor: Refactorización Pipeline IPA
 Fecha: 2026-01-02
+Modificado: 2026-01-09 - Redesign v2.0 con CHECKPOINT events
 ================================================================================
 */
 
@@ -61,6 +68,16 @@ BEGIN
     DECLARE @ProblemasFondo INT, @ProblemasInstrumento INT, @ProblemasMoneda INT;
 
     BEGIN TRY
+        -- ═══════════════════════════════════════════════════════════════════
+        -- EVENTO: SP_INICIO
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_INICIO',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_PNL';
+
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 0: Obtener Portfolio si no se proporcionó
         -- ═══════════════════════════════════════════════════════════════════
@@ -156,10 +173,33 @@ BEGIN
         IF @RowsProcessed = 0
         BEGIN
             PRINT 'sp_Process_PNL: Sin datos PNL para el fondo';
+
+            -- EVENTO: SP_FIN (WARNING - sin datos PNL)
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'SP_FIN',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_PNL',
+                @CodigoRetorno = 1,
+                @Detalles = 'WARNING: Sin datos PNL para el fondo';
+
             RETURN 1;  -- WARNING
         END
 
         PRINT 'sp_Process_PNL: ' + CAST(@RowsProcessed AS NVARCHAR(10)) + ' registros PNL cargados';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- CHECKPOINT: ##PNL_Work creada
+        -- ═══════════════════════════════════════════════════════════════════
+        DECLARE @ChkDetalles NVARCHAR(500) = '{"operacion": "CREATED", "objeto": "' + @TempPNL + '", "registros": ' + CAST(@RowsProcessed AS NVARCHAR(10)) + '}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_PNL',
+            @Detalles = @ChkDetalles;
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 3: Homologar instrumentos y monedas
@@ -182,7 +222,23 @@ BEGIN
         IF @ReturnCode != 0
         BEGIN
             SET @ErrorCount = 1;
-            RETURN @ReturnCode;
+
+            -- ASSERTION_FAILED: La homologación debió pasar en sp_ValidateFund
+            -- Si llegamos aquí con errores de homologación, es un BUG del sistema
+            DECLARE @AssertMsg NVARCHAR(500) = 'ASSERTION_FAILED: Homologación falló en sp_Process_PNL pero sp_ValidateFund retornó 0. ' +
+                                               'Fondo:' + CAST(ISNULL(@ProblemasFondo,0) AS NVARCHAR) +
+                                               ' Instrumento:' + CAST(ISNULL(@ProblemasInstrumento,0) AS NVARCHAR) +
+                                               ' Moneda:' + CAST(ISNULL(@ProblemasMoneda,0) AS NVARCHAR);
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'ERROR',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_PNL',
+                @CodigoRetorno = 4,  -- ASSERTION_FAILED
+                @Detalles = @AssertMsg;
+
+            RETURN 4;  -- ASSERTION_FAILED
         END
 
         -- Actualizar ID_Fund
@@ -193,18 +249,44 @@ BEGIN
         -- RESUMEN
         -- ═══════════════════════════════════════════════════════════════════
 
+        DECLARE @DuracionMs INT = DATEDIFF(second, @StartTime, GETDATE()) * 1000;
+
         PRINT '========================================';
         PRINT 'sp_Process_PNL COMPLETADO';
         PRINT 'Fondo: ' + CAST(@ID_Fund AS NVARCHAR(10));
         PRINT 'Registros PNL: ' + CAST(@RowsProcessed AS NVARCHAR(10));
-        PRINT 'Tiempo: ' + CAST(DATEDIFF(MILLISECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' ms';
+        PRINT 'Tiempo: ' + CAST(@DuracionMs AS NVARCHAR(10)) + ' ms';
         PRINT '========================================';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- EVENTO: SP_FIN (Exitoso)
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_FIN',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_PNL',
+            @CodigoRetorno = 0,
+            @DuracionMs = @DuracionMs,
+            @RowsProcessed = @RowsProcessed;
 
         RETURN 0;  -- OK
 
     END TRY
     BEGIN CATCH
         SET @ErrorCount = 1;
+
+        -- EVENTO: ERROR
+        DECLARE @ErrorMsg NVARCHAR(4000) = ERROR_MESSAGE();
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'ERROR',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_PNL',
+            @CodigoRetorno = 3,
+            @Detalles = @ErrorMsg;
 
         EXEC staging.sp_HandleError
             @ProcName = 'sp_Process_PNL',

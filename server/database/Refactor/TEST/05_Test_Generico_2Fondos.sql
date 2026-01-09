@@ -416,3 +416,366 @@ PRINT '=========================================================================
 PRINT '  TEST COMPLETADO'
 PRINT '================================================================================'
 GO
+
+-- ============================================================================
+-- DIAGNOSTICO DE PLAN DE EJECUCION (VERSION PRINT)
+-- ============================================================================
+-- Esta version imprime todas las recomendaciones como mensajes en lugar de
+-- retornar grids, facilitando la revision en el tab Messages de SSMS.
+-- ============================================================================
+
+PRINT ''
+PRINT '================================================================================'
+PRINT '  DIAGNOSTICO DE PLAN DE EJECUCION'
+PRINT '================================================================================'
+PRINT ''
+
+-- ============================================================================
+-- [1] INDICES FALTANTES SUGERIDOS
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [1] INDICES FALTANTES SUGERIDOS POR EL OPTIMIZADOR                           │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @MissingCount INT = 0;
+DECLARE @MissingLine NVARCHAR(MAX);
+
+DECLARE missing_cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT
+    '  → ' + ISNULL(OBJECT_NAME(d.object_id, d.database_id), 'N/A') +
+    ' | Impacto: ' + CAST(CAST(gs.avg_user_impact AS INT) AS NVARCHAR(10)) + '%' +
+    ' | Usos: ' + CAST(gs.user_seeks + gs.user_scans AS NVARCHAR(10)) +
+    CHAR(13) + CHAR(10) +
+    '    EQ: ' + ISNULL(d.equality_columns, '(ninguno)') +
+    CHAR(13) + CHAR(10) +
+    '    NEQ: ' + ISNULL(d.inequality_columns, '(ninguno)') +
+    CHAR(13) + CHAR(10) +
+    '    INCLUDE: ' + ISNULL(d.included_columns, '(ninguno)')
+FROM sys.dm_db_missing_index_details d
+JOIN sys.dm_db_missing_index_groups g ON d.index_handle = g.index_handle
+JOIN sys.dm_db_missing_index_group_stats gs ON g.index_group_handle = gs.group_handle
+WHERE d.database_id = DB_ID()
+ORDER BY gs.avg_user_impact DESC;
+
+OPEN missing_cursor;
+FETCH NEXT FROM missing_cursor INTO @MissingLine;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    PRINT @MissingLine;
+    PRINT '';
+    SET @MissingCount = @MissingCount + 1;
+    FETCH NEXT FROM missing_cursor INTO @MissingLine;
+END
+
+CLOSE missing_cursor;
+DEALLOCATE missing_cursor;
+
+IF @MissingCount = 0
+    PRINT '  ✓ No hay indices faltantes sugeridos.';
+ELSE
+    PRINT '  Total: ' + CAST(@MissingCount AS NVARCHAR(10)) + ' indice(s) sugerido(s)';
+
+PRINT ''
+
+-- ============================================================================
+-- [2] PLANES CON WARNINGS
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [2] PLANES CON WARNINGS (conversiones, spills, estadisticas)                 │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @WarningCount INT = 0;
+DECLARE @WarningLine NVARCHAR(MAX);
+DECLARE @QueryFragment NVARCHAR(200);
+DECLARE @Ejecuciones INT;
+DECLARE @AvgReads BIGINT;
+DECLARE @TieneWarnings BIT;
+DECLARE @SinStats BIT;
+DECLARE @ConvImplicita BIT;
+
+DECLARE warning_cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT TOP 15
+    LEFT(SUBSTRING(t.text, (qs.statement_start_offset/2)+1,
+        ((CASE qs.statement_end_offset
+            WHEN -1 THEN DATALENGTH(t.text)
+            ELSE qs.statement_end_offset
+        END - qs.statement_start_offset)/2)+1), 80) AS Query_Fragment,
+    qs.execution_count,
+    qs.total_logical_reads / NULLIF(qs.execution_count, 0),
+    qp.query_plan.exist('//Warnings'),
+    qp.query_plan.exist('//ColumnsWithNoStatistics'),
+    qp.query_plan.exist('//PlanAffectingConvert')
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+WHERE (t.text LIKE '%sp_ValidateFund%'
+   OR t.text LIKE '%sp_Homologate%'
+   OR t.text LIKE '%Extract_%'
+   OR t.text LIKE '%staging.%'
+   OR t.text LIKE '%dimensionales.%')
+   AND t.text NOT LIKE '%sys.dm_exec%'
+   AND (qp.query_plan.exist('//Warnings') = 1
+        OR qp.query_plan.exist('//PlanAffectingConvert') = 1
+        OR qp.query_plan.exist('//ColumnsWithNoStatistics') = 1)
+ORDER BY qs.total_logical_reads DESC;
+
+OPEN warning_cursor;
+FETCH NEXT FROM warning_cursor INTO @QueryFragment, @Ejecuciones, @AvgReads, @TieneWarnings, @SinStats, @ConvImplicita;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @WarningLine = '  → Query: ' + REPLACE(REPLACE(@QueryFragment, CHAR(13), ' '), CHAR(10), ' ');
+    PRINT @WarningLine;
+    PRINT '    Ejecuciones: ' + CAST(@Ejecuciones AS NVARCHAR(20)) + ' | Avg Reads: ' + ISNULL(CAST(@AvgReads AS NVARCHAR(20)), 'N/A');
+    PRINT '    Warnings: ' + CASE @TieneWarnings WHEN 1 THEN 'SI' ELSE 'NO' END +
+          ' | Sin Stats: ' + CASE @SinStats WHEN 1 THEN 'SI' ELSE 'NO' END +
+          ' | Conv.Implicita: ' + CASE @ConvImplicita WHEN 1 THEN 'SI' ELSE 'NO' END;
+    PRINT '';
+    SET @WarningCount = @WarningCount + 1;
+    FETCH NEXT FROM warning_cursor INTO @QueryFragment, @Ejecuciones, @AvgReads, @TieneWarnings, @SinStats, @ConvImplicita;
+END
+
+CLOSE warning_cursor;
+DEALLOCATE warning_cursor;
+
+IF @WarningCount = 0
+    PRINT '  ✓ No se detectaron warnings en planes cacheados.';
+ELSE
+    PRINT '  Total: ' + CAST(@WarningCount AS NVARCHAR(10)) + ' plan(es) con warnings';
+
+PRINT ''
+
+-- ============================================================================
+-- [3] ESTADISTICAS DESACTUALIZADAS
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [3] ESTADISTICAS DESACTUALIZADAS (>1000 modificaciones)                      │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @StatsCount INT = 0;
+DECLARE @StatsLine NVARCHAR(MAX);
+
+DECLARE stats_cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT
+    '  → ' + OBJECT_SCHEMA_NAME(s.object_id) + '.' + OBJECT_NAME(s.object_id) +
+    '.' + s.name +
+    CHAR(13) + CHAR(10) +
+    '    Ultima actualizacion: ' + ISNULL(CONVERT(NVARCHAR(20), STATS_DATE(s.object_id, s.stats_id), 120), 'NUNCA') +
+    ' | Filas: ' + ISNULL(CAST(sp.rows AS NVARCHAR(20)), '?') +
+    ' | Modificaciones: ' + CAST(sp.modification_counter AS NVARCHAR(20))
+FROM sys.stats s
+CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
+WHERE OBJECT_SCHEMA_NAME(s.object_id) IN ('extract', 'dimensionales', 'sandbox', 'staging')
+  AND sp.modification_counter > 1000
+ORDER BY sp.modification_counter DESC;
+
+OPEN stats_cursor;
+FETCH NEXT FROM stats_cursor INTO @StatsLine;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    PRINT @StatsLine;
+    PRINT '';
+    SET @StatsCount = @StatsCount + 1;
+    FETCH NEXT FROM stats_cursor INTO @StatsLine;
+END
+
+CLOSE stats_cursor;
+DEALLOCATE stats_cursor;
+
+IF @StatsCount = 0
+    PRINT '  ✓ Todas las estadisticas estan actualizadas.';
+ELSE
+BEGIN
+    PRINT '  Total: ' + CAST(@StatsCount AS NVARCHAR(10)) + ' estadistica(s) desactualizada(s)';
+    PRINT '  RECOMENDACION: Ejecutar UPDATE STATISTICS en las tablas afectadas';
+END
+
+PRINT ''
+
+-- ============================================================================
+-- [4] DETALLE DE CONVERSIONES IMPLICITAS
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [4] CONVERSIONES IMPLICITAS EN PLANES (afectan rendimiento)                  │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @ConvCount INT = 0;
+DECLARE @ConvLine NVARCHAR(MAX);
+
+;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+SELECT
+    @ConvCount = COUNT(*)
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+CROSS APPLY qp.query_plan.nodes('//PlanAffectingConvert') AS q(n)
+WHERE qp.dbid = DB_ID();
+
+IF @ConvCount = 0
+    PRINT '  ✓ No se detectaron conversiones implicitas que afecten el plan.';
+ELSE
+BEGIN
+    DECLARE conv_cursor CURSOR LOCAL FAST_FORWARD FOR
+    WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+    SELECT TOP 15
+        '  → Objeto: ' + ISNULL(OBJECT_NAME(qp.objectid, qp.dbid), '(ad-hoc)') +
+        CHAR(13) + CHAR(10) +
+        '    Expresion: ' + LEFT(ISNULL(n.value('(@Expression)[1]', 'varchar(500)'), 'N/A'), 100) +
+        CHAR(13) + CHAR(10) +
+        '    Problema: ' + ISNULL(n.value('(@ConvertIssue)[1]', 'varchar(100)'), 'Conversion implicita') +
+        ' | Ejecuciones: ' + CAST(qs.execution_count AS NVARCHAR(20))
+    FROM sys.dm_exec_query_stats qs
+    CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+    CROSS APPLY qp.query_plan.nodes('//PlanAffectingConvert') AS q(n)
+    WHERE qp.dbid = DB_ID()
+    ORDER BY qs.execution_count DESC;
+
+    OPEN conv_cursor;
+    FETCH NEXT FROM conv_cursor INTO @ConvLine;
+
+    DECLARE @ConvPrinted INT = 0;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        PRINT @ConvLine;
+        PRINT '';
+        SET @ConvPrinted = @ConvPrinted + 1;
+        FETCH NEXT FROM conv_cursor INTO @ConvLine;
+    END
+
+    CLOSE conv_cursor;
+    DEALLOCATE conv_cursor;
+
+    PRINT '  Total: ' + CAST(@ConvCount AS NVARCHAR(10)) + ' conversion(es) detectada(s)';
+    PRINT '  RECOMENDACION: Revisar collation/tipos de datos en JOINs y WHERE';
+END
+
+PRINT ''
+
+-- ============================================================================
+-- [5] INDEX SCANS EN TABLAS CLAVE
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [5] INDEX SCANS EN TABLAS CLAVE (considerar optimizacion si %Scans > 50)     │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @ScanCount INT = 0;
+DECLARE @ScanLine NVARCHAR(MAX);
+
+DECLARE scan_cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT TOP 20
+    '  → ' + OBJECT_SCHEMA_NAME(i.object_id) + '.' + OBJECT_NAME(i.object_id) +
+    ' [' + i.name + ']' +
+    CHAR(13) + CHAR(10) +
+    '    Scans: ' + CAST(ius.user_scans AS NVARCHAR(20)) +
+    ' | Seeks: ' + CAST(ius.user_seeks AS NVARCHAR(20)) +
+    ' | %Scans: ' + CAST(
+        CASE WHEN ius.user_seeks > 0
+             THEN CAST(ius.user_scans * 100.0 / (ius.user_scans + ius.user_seeks) AS DECIMAL(5,2))
+             ELSE 100
+        END AS NVARCHAR(10)) + '%' +
+    CASE
+        WHEN ius.user_scans * 100.0 / NULLIF(ius.user_scans + ius.user_seeks, 0) > 80 THEN ' ⚠ ALTO'
+        WHEN ius.user_scans * 100.0 / NULLIF(ius.user_scans + ius.user_seeks, 0) > 50 THEN ' ⚡ MEDIO'
+        ELSE ''
+    END
+FROM sys.dm_db_index_usage_stats ius
+JOIN sys.indexes i ON ius.object_id = i.object_id AND ius.index_id = i.index_id
+WHERE ius.database_id = DB_ID()
+  AND OBJECT_SCHEMA_NAME(i.object_id) IN ('extract', 'dimensionales', 'sandbox', 'staging')
+  AND ius.user_scans > 0
+  AND i.name IS NOT NULL
+ORDER BY ius.user_scans DESC;
+
+OPEN scan_cursor;
+FETCH NEXT FROM scan_cursor INTO @ScanLine;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    PRINT @ScanLine;
+    SET @ScanCount = @ScanCount + 1;
+    FETCH NEXT FROM scan_cursor INTO @ScanLine;
+END
+
+CLOSE scan_cursor;
+DEALLOCATE scan_cursor;
+
+IF @ScanCount = 0
+    PRINT '  ✓ No hay index scans significativos.';
+ELSE
+    PRINT '  Total: ' + CAST(@ScanCount AS NVARCHAR(10)) + ' indice(s) con scans';
+
+PRINT ''
+
+-- ============================================================================
+-- [6] RESUMEN DE RECOMENDACIONES
+-- ============================================================================
+PRINT '┌──────────────────────────────────────────────────────────────────────────────┐'
+PRINT '│ [6] RESUMEN DE RECOMENDACIONES                                               │'
+PRINT '└──────────────────────────────────────────────────────────────────────────────┘'
+
+DECLARE @TotalIssues INT = 0;
+
+-- Contar issues
+SELECT @TotalIssues = @TotalIssues + COUNT(*)
+FROM sys.dm_db_missing_index_details d
+WHERE d.database_id = DB_ID();
+
+SELECT @TotalIssues = @TotalIssues + COUNT(*)
+FROM sys.stats s
+CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
+WHERE OBJECT_SCHEMA_NAME(s.object_id) IN ('extract', 'dimensionales', 'sandbox', 'staging')
+  AND sp.modification_counter > 1000;
+
+IF @TotalIssues = 0
+BEGIN
+    PRINT ''
+    PRINT '  ╔══════════════════════════════════════════════════════════════════════╗'
+    PRINT '  ║  ✓ ¡EXCELENTE! No se encontraron problemas de optimizacion.          ║'
+    PRINT '  ╚══════════════════════════════════════════════════════════════════════╝'
+END
+ELSE
+BEGIN
+    PRINT ''
+    PRINT '  Acciones sugeridas:'
+    PRINT ''
+
+    -- Indices faltantes
+    IF EXISTS (SELECT 1 FROM sys.dm_db_missing_index_details WHERE database_id = DB_ID())
+    BEGIN
+        PRINT '  1. CREAR INDICES FALTANTES:'
+        PRINT '     Revisar seccion [1] y crear los indices con mayor impacto';
+        PRINT ''
+    END
+
+    -- Estadisticas
+    IF EXISTS (
+        SELECT 1 FROM sys.stats s
+        CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
+        WHERE OBJECT_SCHEMA_NAME(s.object_id) IN ('extract', 'dimensionales', 'sandbox', 'staging')
+          AND sp.modification_counter > 1000
+    )
+    BEGIN
+        PRINT '  2. ACTUALIZAR ESTADISTICAS:'
+        PRINT '     EXEC sp_updatestats;'
+        PRINT '     -- O para tablas especificas:'
+        PRINT '     -- UPDATE STATISTICS schema.tabla;'
+        PRINT ''
+    END
+
+    -- Conversiones implicitas
+    IF @ConvCount > 0
+    BEGIN
+        PRINT '  3. CORREGIR CONVERSIONES IMPLICITAS:'
+        PRINT '     - Verificar tipos de datos en JOINs coincidan';
+        PRINT '     - Verificar collation en comparaciones de strings';
+        PRINT '     - Usar CAST/CONVERT explicito donde sea necesario';
+        PRINT ''
+    END
+END
+
+PRINT ''
+PRINT '================================================================================'
+PRINT '  FIN DIAGNOSTICO - ' + CONVERT(NVARCHAR(30), GETDATE(), 120)
+PRINT '================================================================================'
+GO

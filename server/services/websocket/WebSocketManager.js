@@ -1,43 +1,37 @@
 /**
  * WebSocketManager - Gestor Central de WebSockets (Singleton)
  *
- * Gestiona conexiones WebSocket para actualizar clientes en tiempo real sobre el estado
- * de ejecuciones del pipeline (fondos procesándose, estados granulares, errores).
+ * ARQUITECTURA DB-CENTRIC:
+ * Este servicio es un RETRANSMISOR pasivo. Recibe eventos del MessageProcessor
+ * (que los obtiene via Service Broker desde la DB) y los retransmite a clientes
+ * WebSocket suscritos.
  *
  * RECIBE:
  * - server: Servidor HTTP de Express (para montar WebSocket Server)
- * - getPoolFn: Función para obtener pool de SQL Server (opcional)
- * - Mensajes de clientes: SUBSCRIBE, UNSUBSCRIBE, PING, GET_STATUS
- * - Eventos desde TrackingService: broadcast() para actualizaciones en tiempo real
+ * - Mensajes de clientes: SUBSCRIBE, UNSUBSCRIBE, PING
+ * - Eventos desde MessageProcessor: emitToExecution() para retransmitir
  *
  * PROCESA:
  * 1. Inicializa WebSocket Server en /api/ws/pipeline
  * 2. Maneja conexiones entrantes: asigna clientId, registra cliente
  * 3. Gestiona suscripciones: Map de idEjecucion → Set de clientIds suscritos
- * 4. Recibe mensajes de clientes: SUBSCRIBE (suscribirse a ejecución), PING (heartbeat)
- * 5. Emite eventos a clientes suscritos: FUND_UPDATE (cambio estado fondo), EXECUTION_UPDATE (cambio estado ejecución)
- * 6. Heartbeat: ping cada 30s, desconecta clientes sin pong en 60s
- * 7. Auto-cleanup: elimina conexiones cerradas y clientes inactivos
+ * 4. Recibe mensajes de clientes: SUBSCRIBE, UNSUBSCRIBE, PING
+ * 5. Heartbeat: ping cada 30s, desconecta clientes sin pong en 60s
  *
  * ENVIA:
- * - Eventos WebSocket a: Clientes conectados (frontend)
+ * - Eventos WebSocket a clientes suscritos:
  *   * CONNECTED: al conectarse (incluye clientId)
  *   * SUBSCRIBED: al suscribirse a ejecución
- *   * FUND_UPDATE: estado de fondo actualizado (desde TrackingService)
- *   * EXECUTION_UPDATE: estado de ejecución actualizado (desde TrackingService)
- *   * PONG: respuesta a PING (heartbeat)
+ *   * SP_START, SP_END, STANDBY, ERROR: eventos del pipeline (via MessageProcessor)
+ *   * FUND_UPDATE: estado agregado de fondo (via MessageProcessor)
+ *   * PONG: respuesta a PING
  *
  * DEPENDENCIAS:
- * - Requiere: HTTP Server de Express (para montar WebSocket)
- * - Requerido por: TrackingService (emite eventos), Frontend (recibe actualizaciones)
+ * - Requiere: HTTP Server de Express
+ * - Requerido por: MessageProcessor (retransmite eventos), Frontend (recibe)
  *
- * CONTEXTO PARALELO:
- * - Servicio SINGLETON: una sola instancia global para toda la aplicación
- * - Thread-safe: Node.js single-threaded (event loop), Map operations son síncronas
- * - Múltiples clientes: cada conexión tiene su clientId único
- * - Suscripciones: un cliente puede suscribirse a múltiples ejecuciones
- * - Broadcasting selectivo: eventos se emiten SOLO a clientes suscritos a esa ejecución
- * - Heartbeat: ping/pong cada 30s para detectar conexiones muertas
+ * FLUJO:
+ * DB (sp_EmitirEvento) → Service Broker → ServiceBrokerListener → MessageProcessor → WebSocketManager → Browser
  */
 
 const WebSocket = require('ws');
@@ -49,17 +43,13 @@ class WebSocketManager {
     this.subscriptions = new Map(); // Map<idEjecucion, Set<clientId>>
     this.heartbeatInterval = null;
     this.nextClientId = 1;
-    this.getPoolFn = null; // Función para obtener pool de DB
   }
 
   /**
    * Inicializar WebSocket Server
    * @param {http.Server} server - Servidor HTTP de Express
-   * @param {Function} getPoolFn - Función para obtener pool de DB
    */
-  initialize(server, getPoolFn = null) {
-    this.getPoolFn = getPoolFn;
-
+  initialize(server) {
     this.wss = new WebSocket.Server({
       server,
       path: '/api/ws/pipeline',
@@ -204,92 +194,8 @@ class WebSocketManager {
       },
     });
 
-    // Enviar estado inicial
-    await this.sendInitialState(clientId, ejecucionKey);
-  }
-
-  /**
-   * Enviar estado inicial de una ejecución a un cliente
-   */
-  async sendInitialState(clientId, idEjecucion) {
-    if (!this.getPoolFn) {
-      console.warn('[WebSocketManager] No se puede enviar estado inicial - getPoolFn no configurado');
-      return;
-    }
-
-    try {
-      const sql = require('mssql');
-      const pool = await this.getPoolFn();
-
-      // Obtener ejecución
-      const ejecucionResult = await pool.request()
-        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .query(`
-          SELECT * FROM logs.Ejecuciones
-          WHERE ID_Ejecucion = @ID_Ejecucion
-        `);
-
-      if (ejecucionResult.recordset.length === 0) {
-        console.warn(`[WebSocketManager] Ejecución ${idEjecucion} no encontrada en BD`);
-        return;
-      }
-
-      // Obtener fondos
-      const fondosResult = await pool.request()
-        .input('ID_Ejecucion', sql.BigInt, idEjecucion)
-        .query(`
-          SELECT
-            ef.ID,
-            ef.ID_Ejecucion,
-            ef.ID_Fund,
-            ef.FundShortName,
-            ef.Portfolio_Geneva,
-            ef.Portfolio_CAPM,
-            ef.Portfolio_Derivados,
-            ef.Portfolio_UBS,
-            ef.Estado_Extraccion,
-            ef.Estado_Validacion,
-            ef.Estado_Process_IPA,
-            ef.Estado_Process_CAPM,
-            ef.Estado_Process_Derivados,
-            ef.Estado_Process_PNL,
-            ef.Estado_Process_UBS,
-            ef.Estado_Concatenar,
-            ef.Estado_Final,
-            ef.Paso_Con_Error,
-            ef.Mensaje_Error,
-            ef.Inicio_Procesamiento,
-            ef.Fin_Procesamiento,
-            ef.Duracion_Ms,
-            ef.Requiere_Derivados,
-            ef.Incluir_En_Cubo,
-            ef.Elegible_Reproceso,
-            bf.FundName
-          FROM logs.Ejecucion_Fondos ef
-          LEFT JOIN dimensionales.BD_Funds bf ON CAST(ef.ID_Fund AS INT) = bf.ID_Fund
-          WHERE ef.ID_Ejecucion = @ID_Ejecucion
-          ORDER BY ef.FundShortName
-        `);
-
-      // Enviar mensaje INITIAL_STATE
-      this.send(clientId, {
-        type: 'INITIAL_STATE',
-        data: {
-          ejecucion: ejecucionResult.recordset[0],
-          fondos: fondosResult.recordset,
-          timestamp: new Date().toISOString(),
-        },
-      });
-    } catch (error) {
-      console.error(`[WebSocketManager] Error enviando estado inicial a cliente ${clientId}:`, error);
-      this.send(clientId, {
-        type: 'ERROR',
-        data: {
-          error: 'Error obteniendo estado inicial',
-          details: error.message,
-        },
-      });
-    }
+    // NOTA: No hay "estado inicial" - el cliente recibe eventos en tiempo real
+    // via Service Broker. El estado se construye acumulando eventos.
   }
 
   /**

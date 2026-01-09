@@ -4,13 +4,14 @@ GO
 /*
 ================================================================================
 SP: staging.sp_Homologate
-Version: v2.0 - Case Sensitive Collation
+Version: v2.1 - Fix Collation Conflict
 ================================================================================
-CAMBIOS v2.0:
-  - BREAKING: Removido COLLATE DATABASE_DEFAULT de todos los JOINs
-  - Las columnas ahora usan Latin1_General_CS_AS consistentemente
-  - La tabla temporal #Homologacion usa collation CS_AS
-  - REQUISITO: Ejecutar 99_Migracion_Collation_CS.sql antes de este SP
+CAMBIOS v2.1:
+  - FIX: Agregado COLLATE Latin1_General_CS_AS explícito en JOINs
+  - Las tablas ##*_Work usan CI_AS (database default)
+  - Las tablas dimensionales.HOMOL_* usan CS_AS
+  - COLLATE explícito en lado izquierdo del JOIN resuelve conflicto
+  - Matching sigue siendo Case Sensitive (CS_AS)
 
 NOTA: Este SP tiene dos funciones:
 
@@ -99,7 +100,7 @@ BEGIN
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 2: Extraer datos únicos y homologar con LEFT JOINs
-        -- v2.0: Sin COLLATE DATABASE_DEFAULT (todas las columnas son CS_AS)
+        -- v2.1: COLLATE Latin1_General_CS_AS para matching case-sensitive
         -- ═══════════════════════════════════════════════════════════════════
 
         SET @SQL = N'
@@ -117,13 +118,13 @@ BEGIN
             END
         FROM ' + @TempTableName + ' t
         LEFT JOIN dimensionales.HOMOL_Funds hf
-            ON t.' + QUOTENAME(@PortfolioColumn) + ' = hf.Portfolio
+            ON t.' + QUOTENAME(@PortfolioColumn) + ' COLLATE Latin1_General_CS_AS = hf.Portfolio
             AND hf.Source = @Source
         LEFT JOIN dimensionales.HOMOL_Instrumentos hi
-            ON t.' + QUOTENAME(@InvestIDColumn) + ' = hi.SourceInvestment
+            ON t.' + QUOTENAME(@InvestIDColumn) + ' COLLATE Latin1_General_CS_AS = hi.SourceInvestment
             AND hi.Source = @Source
         LEFT JOIN dimensionales.HOMOL_Monedas hm
-            ON t.' + QUOTENAME(@CurrencyColumn) + ' = hm.Name
+            ON t.' + QUOTENAME(@CurrencyColumn) + ' COLLATE Latin1_General_CS_AS = hm.Name
             AND hm.Source = @Source';
 
         EXEC sp_executesql @SQL,
@@ -194,7 +195,7 @@ BEGIN
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 5: Actualizar tabla original con IDs homologados (si no hay errores)
-        -- v2.0: Sin COLLATE DATABASE_DEFAULT
+        -- v2.1: COLLATE Latin1_General_CS_AS para matching case-sensitive
         -- ═══════════════════════════════════════════════════════════════════
 
         IF @ReturnCode = 0
@@ -207,8 +208,8 @@ BEGIN
                 t.PK2 = CAST(h.ID_Instrumento AS VARCHAR(10)) + ''-'' + CAST(h.id_CURR AS VARCHAR(10))
             FROM ' + @TempTableName + ' t
             INNER JOIN #Homologacion h
-                ON t.' + QUOTENAME(@InvestIDColumn) + ' = h.InvestID
-                AND t.' + QUOTENAME(@CurrencyColumn) + ' = h.Currency';
+                ON t.' + QUOTENAME(@InvestIDColumn) + ' COLLATE Latin1_General_CS_AS = h.InvestID
+                AND t.' + QUOTENAME(@CurrencyColumn) + ' COLLATE Latin1_General_CS_AS = h.Currency';
 
             EXEC sp_executesql @SQL;
 

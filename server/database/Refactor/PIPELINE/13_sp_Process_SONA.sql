@@ -1,23 +1,32 @@
 /*
 ================================================================================
 SP: staging.sp_Process_SONA
+Version: v2.0 - Redesign DB-Centric (descuadres validados en ValidateFund)
+================================================================================
 Descripción: Valida patrimonio total del fondo contra SONA (NAV).
              - Calcula total IPA (sin excluidos) + CAPM + Derivados + Ajustes
-             - Compara vs extract.SONA
-             - Si diferencia > umbral → código 9 (DESCUADRES_NAV)
-             - Si diferencia <= umbral → crea ajuste en ##Ajustes
+             - Crea ajuste final de cuadre si hay diferencia (dentro de umbral pre-validado)
+
+PRINCIPIO FUNDAMENTAL:
+  Si sp_ValidateFund pasó, este SP NO DEBE fallar por validaciones de negocio.
+  Cualquier falla aquí es un BUG del sistema (ASSERTION_FAILED).
 
 Prerequisito: sp_Process_IPA, sp_Process_CAPM, sp_Process_Derivados deben haber completado
 
 Códigos de retorno:
   0  = OK
-  1  = WARNING (sin datos SONA)
-  2  = RETRY
-  3  = ERROR_CRITICO
-  9  = DESCUADRES_NAV
+  1  = WARNING (sin datos SONA, OK si fondo no requiere SONA)
+  3  = ERROR_CRITICO (exception no esperada)
+  4  = ASSERTION_FAILED (bug del sistema - prerequisitos no cumplidos)
+
+NOTA: El código 9 (DESCUADRES_NAV) fue movido a sp_ValidateFund FASE 4.
+
+CHECKPOINT Events emitidos:
+  - VERIFIED ##IPA_Work (prerequisito validado)
 
 Autor: Refactorización Pipeline IPA
 Fecha: 2026-01-02
+Modificado: 2026-01-09 - Redesign v2.0 con CHECKPOINT events
 ================================================================================
 */
 
@@ -72,13 +81,53 @@ BEGIN
 
     BEGIN TRY
         -- ═══════════════════════════════════════════════════════════════════
-        -- PASO 0: Validaciones previas
+        -- EVENTO: SP_INICIO
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_INICIO',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_SONA';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- PASO 0: ASSERTION - Verificar prerequisitos
+        -- Si ValidateFund pasó, ##IPA_Work DEBE existir. Si no existe, es un BUG.
         -- ═══════════════════════════════════════════════════════════════════
 
-        -- Verificar que existe ##IPA_Work
-        SET @SQL = N'IF OBJECT_ID(''tempdb..' + @TempWork + ''', ''U'') IS NULL
-                     RAISERROR(''Tabla ' + @TempWork + ' no existe. Ejecutar sp_Process_IPA primero.'', 16, 1)';
-        EXEC sp_executesql @SQL;
+        DECLARE @IPAWorkExists BIT = 0;
+        SET @SQL = N'IF OBJECT_ID(''tempdb..' + @TempWork + ''', ''U'') IS NOT NULL SET @Exists = 1';
+        EXEC sp_executesql @SQL, N'@Exists BIT OUTPUT', @IPAWorkExists OUTPUT;
+
+        IF @IPAWorkExists = 0
+        BEGIN
+            -- ASSERTION_FAILED: Esto es un BUG, no debería pasar si ValidateFund pasó
+            DECLARE @AssertMsg NVARCHAR(500) = 'ASSERTION_FAILED: Tabla ' + @TempWork + ' no existe. Bug en orquestador o sp_Process_IPA falló silenciosamente.';
+            PRINT @AssertMsg;
+
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'ERROR',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_SONA',
+                @CodigoRetorno = 4,
+                @Detalles = @AssertMsg;
+
+            RETURN 4;  -- ASSERTION_FAILED
+        END
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- CHECKPOINT: ##IPA_Work verificada (prerequisito OK)
+        -- ═══════════════════════════════════════════════════════════════════
+        DECLARE @ChkVerified NVARCHAR(500) = '{"operacion": "VERIFIED", "objeto": "' + @TempWork + '", "mensaje": "Prerequisito IPA Work existe"}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_SONA',
+            @Detalles = @ChkVerified;
 
         -- Obtener umbral configurado
         SET @Umbral = staging.fn_GetUmbral(@ID_Fund, 'SONA');
@@ -184,47 +233,35 @@ BEGIN
         IF @TotalSONA = 0
         BEGIN
             PRINT 'sp_Process_SONA: Sin datos SONA para el fondo';
+
+            -- EVENTO: SP_FIN (WARNING - sin datos SONA)
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'SP_FIN',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_SONA',
+                @CodigoRetorno = 1,
+                @Detalles = 'WARNING: Sin datos SONA para el fondo';
+
             RETURN 1;  -- WARNING - No hay SONA para validar
         END
 
         PRINT 'sp_Process_SONA: Total SONA = ' + CAST(@TotalSONA AS NVARCHAR(20));
 
         -- ═══════════════════════════════════════════════════════════════════
-        -- PASO 7: Calcular diferencia y validar
+        -- PASO 7: Calcular diferencia (descuadre ya validado en ValidateFund FASE 4)
         -- ═══════════════════════════════════════════════════════════════════
 
         SET @Diferencia = @TotalSONA - @TotalCalculado;
 
         PRINT 'sp_Process_SONA: Diferencia (SONA - Calculado) = ' + CAST(@Diferencia AS NVARCHAR(20));
 
-        IF ABS(@Diferencia) > @Umbral
-        BEGIN
-            -- Diferencia excede umbral → Stand-by
-            PRINT 'ERROR: Descuadre NAV excede umbral (' + CAST(@Umbral AS NVARCHAR(10)) + ')';
-
-            -- MERGE para evitar duplicados en re-ejecuciones
-            MERGE sandbox.Alertas_Descuadre_NAV AS target
-            USING (SELECT @ID_Ejecucion AS ID_Ejecucion, @ID_Fund AS ID_Fund, @FechaReporte AS FechaReporte) AS source
-            ON target.ID_Ejecucion = source.ID_Ejecucion
-               AND target.ID_Fund = source.ID_Fund
-               AND target.FechaReporte = source.FechaReporte
-            WHEN MATCHED THEN
-                UPDATE SET
-                    Total_IPA = @TotalCalculado,
-                    Total_SONA = @TotalSONA,
-                    Diferencia = @Diferencia,
-                    UmbralAplicado = @Umbral,
-                    FechaProceso = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (ID_Ejecucion, ID_Fund, FechaReporte, Portfolio, Total_IPA, Total_SONA, Diferencia, UmbralAplicado, FechaProceso)
-                VALUES (@ID_Ejecucion, @ID_Fund, @FechaReporte, @Portfolio, @TotalCalculado, @TotalSONA, @Diferencia, @Umbral, GETDATE());
-
-            SET @ErrorCount = 1;
-            RETURN 9;  -- DESCUADRES_NAV
-        END
+        -- NOTA: La validación de descuadre vs umbral fue movida a sp_ValidateFund FASE 4.
+        -- Si llegamos aquí, ValidateFund ya validó que la diferencia está dentro del umbral.
 
         -- ═══════════════════════════════════════════════════════════════════
-        -- PASO 8: Crear ajuste si hay diferencia (dentro del umbral)
+        -- PASO 8: Crear ajuste si hay diferencia (ya validada dentro del umbral)
         -- ═══════════════════════════════════════════════════════════════════
 
         IF ABS(@Diferencia) > 0.01  -- Tolerancia mínima
@@ -248,6 +285,8 @@ BEGIN
         -- RESUMEN
         -- ═══════════════════════════════════════════════════════════════════
 
+        DECLARE @DuracionMs INT = DATEDIFF(second, @StartTime, GETDATE()) * 1000;
+
         PRINT '========================================';
         PRINT 'sp_Process_SONA COMPLETADO';
         PRINT 'Fondo: ' + CAST(@ID_Fund AS NVARCHAR(10));
@@ -259,14 +298,37 @@ BEGIN
         PRINT 'Total SONA: ' + CAST(@TotalSONA AS NVARCHAR(20));
         PRINT 'Diferencia: ' + CAST(@Diferencia AS NVARCHAR(20));
         PRINT 'Ajuste creado: ' + CASE WHEN @AjusteCreado = 1 THEN 'SI' ELSE 'NO' END;
-        PRINT 'Tiempo: ' + CAST(DATEDIFF(MILLISECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' ms';
+        PRINT 'Tiempo: ' + CAST(@DuracionMs AS NVARCHAR(10)) + ' ms';
         PRINT '========================================';
+
+        -- ═══════════════════════════════════════════════════════════════════
+        -- EVENTO: SP_FIN (Exitoso)
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_FIN',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_SONA',
+            @CodigoRetorno = 0,
+            @DuracionMs = @DuracionMs;
 
         RETURN 0;  -- OK
 
     END TRY
     BEGIN CATCH
         SET @ErrorCount = 1;
+
+        -- EVENTO: ERROR
+        DECLARE @ErrorMsg NVARCHAR(4000) = ERROR_MESSAGE();
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'ERROR',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_SONA',
+            @CodigoRetorno = 3,
+            @Detalles = @ErrorMsg;
 
         EXEC staging.sp_HandleError
             @ProcName = 'sp_Process_SONA',

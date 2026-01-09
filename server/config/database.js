@@ -33,10 +33,10 @@ const baseConfig = {
   },
 };
 
-// Configuración para Inteligencia_Producto_Dev (BD principal de procesamiento)
+// Configuración para BD principal de procesamiento (desde .env)
 const configPrincipal = {
   ...baseConfig,
-  database: 'Inteligencia_Producto_Dev',
+  database: process.env.DB_DATABASE,
 };
 
 // Configuración para MonedaHomologacion (BD de frontend/sandbox)
@@ -49,7 +49,7 @@ let poolPrincipal = null;
 let poolHomologacion = null;
 
 /**
- * Obtiene el pool de conexión a Inteligencia_Producto_Dev (BD principal)
+ * Obtiene el pool de conexión a la BD principal (configurada en .env DB_DATABASE)
  */
 const getPool = async () => {
   if (!poolPrincipal) {
@@ -87,7 +87,7 @@ const closePool = async () => {
   if (poolPrincipal) {
     await poolPrincipal.close();
     poolPrincipal = null;
-    console.log('🔌 Conexión a Inteligencia_Producto_Dev cerrada');
+    console.log('🔌 Conexión a BD principal cerrada');
   }
   if (poolHomologacion) {
     await poolHomologacion.close();
@@ -98,7 +98,7 @@ const closePool = async () => {
 
 module.exports = {
   sql,
-  getPool,              // Pool principal (Inteligencia_Producto_Dev)
+  getPool,              // Pool principal (DB_DATABASE en .env)
   getPoolHomologacion,  // Pool de homologación (MonedaHomologacion)
   closePool,
 };

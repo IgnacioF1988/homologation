@@ -1,0 +1,162 @@
+{
+  "name": "homologation",
+  "version": "2.0.0",
+  "description": "Claude Code configuration for Homologation System - DB-Centric Pipeline Architecture",
+
+  "commands": {
+    "analyze-pipeline": {
+      "file": "commands/analyze-pipeline.md",
+      "description": "Analyze current pipeline state in database"
+    },
+    "create-sp-event": {
+      "file": "commands/create-sp-event.md",
+      "description": "Add Service Broker event emission to a stored procedure"
+    },
+    "debug-service-broker": {
+      "file": "commands/debug-service-broker.md",
+      "description": "Diagnose Service Broker messaging issues"
+    },
+    "create-migration": {
+      "file": "commands/create-migration.md",
+      "description": "Create numbered SQL migration for DB-centric pipeline"
+    },
+    "create-component": {
+      "file": "commands/create-component.md",
+      "description": "Create React component with real-time support"
+    },
+    "plan-feature": {
+      "file": "commands/plan-feature.md",
+      "description": "Create structured plan for large features"
+    }
+  },
+
+  "skills": {
+    "db-pipeline": {
+      "file": "skills/db-pipeline/SKILL.md",
+      "description": "DB-centric pipeline architecture, stored procedures, return codes, orchestration patterns"
+    },
+    "service-broker": {
+      "file": "skills/service-broker/SKILL.md",
+      "description": "Service Broker messaging patterns, queue management, debugging techniques"
+    },
+    "realtime-frontend": {
+      "file": "skills/realtime-frontend/SKILL.md",
+      "description": "WebSocket patterns, reactive state management, optimistic updates"
+    }
+  },
+
+  "mcpServers": {
+    "sqlserver-moneda": {
+      "enabled": true,
+      "description": "Direct access to SQL Server - pipeline state, Service Broker queues"
+    },
+    "filesystem": {
+      "enabled": true,
+      "description": "Local filesystem access for project files"
+    },
+    "context7": {
+      "enabled": true,
+      "description": "Access to library documentation"
+    },
+    "playwright": {
+      "enabled": true,
+      "description": "E2E testing and UI automation"
+    },
+    "chrome-devtools": {
+      "enabled": true,
+      "description": "Browser debugging and inspection"
+    },
+    "exa": {
+      "enabled": true,
+      "description": "Web search with context"
+    }
+  },
+
+  "projectContext": {
+    "paradigm": "DB-Centric",
+    "stack": {
+      "database": ["SQL Server", "Service Broker"],
+      "backend": ["Node.js", "Express", "WebSocket"],
+      "frontend": ["React 18.2", "Material-UI 5.14", "WebSocket"]
+    },
+    "architecture": {
+      "orchestrator": "SQL Server (Stored Procedures)",
+      "communication": "Service Broker (push events)",
+      "backend_role": "Listener + WebSocket Gateway",
+      "frontend_pattern": "Reactive (WebSocket subscriptions)"
+    },
+    "pipeline": {
+      "phases": ["EXTRACT", "VALIDATE", "PROCESS_IPA", "PROCESS_CAPM", "PROCESS_DERIVADOS", "PROCESS_PNL", "PROCESS_UBS", "CONSOLIDAR"],
+      "return_codes": {
+        "0": "OK",
+        "1": "WARNING",
+        "2": "RETRY",
+        "3": "ERROR_CRITICO",
+        "5": "SUCIEDADES",
+        "6": "HOMOLOGACION_INSTRUMENTOS",
+        "7": "DESCUADRES_CAPM",
+        "8": "DESCUADRES_DERIVADOS",
+        "9": "DESCUADRES_NAV",
+        "10": "HOMOLOGACION_FONDOS",
+        "11": "HOMOLOGACION_MONEDAS",
+        "12": "HOMOLOGACION_BENCHMARKS",
+        "13": "EXTRACT_IPA_FALTANTE",
+        "14": "EXTRACT_CAPM_FALTANTE",
+        "15": "EXTRACT_SONA_FALTANTE",
+        "16": "EXTRACT_PNL_FALTANTE",
+        "17": "EXTRACT_DERIVADOS_FALTANTE",
+        "18": "EXTRACT_POSMODRF_FALTANTE"
+      }
+    },
+    "conventions": {
+      "commits": "Conventional Commits",
+      "sql": {
+        "storedProcedures": "schema.sp_Verbo_Objeto_vX",
+        "events": "broker.sp_EmitirEvento",
+        "tables": "schema.NombrePlural"
+      },
+      "serviceBroker": {
+        "messageTypes": "SP_INICIO, SP_FIN, ERROR, STANDBY, PROCESO_INICIO, PROCESO_FIN",
+        "queueName": "broker.ETLEventQueue"
+      },
+      "websocket": {
+        "events": "UPPER_SNAKE_CASE",
+        "data": "camelCase"
+      },
+      "javascript": {
+        "services": "camelCase.js",
+        "classes": "PascalCase",
+        "constants": "UPPER_SNAKE_CASE"
+      },
+      "react": {
+        "components": "PascalCase",
+        "hooks": "useCamelCase",
+        "props": "camelCase"
+      }
+    }
+  },
+
+  "workflows": {
+    "analyze-pipeline-state": [
+      "analyze-pipeline",
+      "Review fund states",
+      "Check Service Broker queues"
+    ],
+    "add-event-to-sp": [
+      "create-sp-event {sp_name}",
+      "create-migration with modified SP",
+      "Test event emission"
+    ],
+    "debug-messaging": [
+      "debug-service-broker",
+      "Check queue status",
+      "Verify backend listener"
+    ],
+    "new-realtime-feature": [
+      "plan-feature",
+      "Design WebSocket events",
+      "Implement SP with events",
+      "Create React components"
+    ]
+  }
+}

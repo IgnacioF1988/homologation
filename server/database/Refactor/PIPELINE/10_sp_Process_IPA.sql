@@ -1,6 +1,8 @@
 /*
 ================================================================================
 SP: staging.sp_Process_IPA
+Version: v2.0 - Redesign DB-Centric con CHECKPOINT events
+================================================================================
 Descripción: Procesa datos de IPA (Investment Position Appraisal).
              - Carga extract.IPA → ##IPA_Work
              - Homologa instrumentos y monedas
@@ -9,19 +11,27 @@ Descripción: Procesa datos de IPA (Investment Position Appraisal).
              - Marca registros Cash/MTM con Flag_Excluir = 1
              - Crea tabla ##Ajustes para acumular ajustes
 
-Prerequisito: sp_ValidateFund debe haber retornado 0 o 1
+PRINCIPIO FUNDAMENTAL:
+  Si sp_ValidateFund pasó, este SP NO DEBE fallar por validaciones de negocio.
+  Cualquier falla aquí es un BUG del sistema (ASSERTION_FAILED).
+
+CHECKPOINT Events emitidos:
+  - CREATED ##IPA_Work (después de cargar datos)
+  - CREATED ##IPA_Cash (después de extraer Cash)
+  - CREATED ##IPA_MTM (después de extraer MTM)
+  - CREATED ##Ajustes (tabla vacía para acumular)
+
+Prerequisito: sp_ValidateFund debe haber retornado 0
 
 Códigos de retorno:
   0  = OK
   1  = WARNING (sin datos, pero OK)
-  2  = RETRY
-  3  = ERROR_CRITICO
-  6  = HOMOLOGACION_INSTRUMENTOS
-  10 = HOMOLOGACION_FONDOS
-  11 = HOMOLOGACION_MONEDAS
+  3  = ERROR_CRITICO (exception)
+  4  = ASSERTION_FAILED (bug - homologación debió pasar en ValidateFund)
 
 Autor: Refactorización Pipeline IPA
 Fecha: 2026-01-02
+Modificado: 2026-01-09 - Redesign v2.0 con CHECKPOINT events
 ================================================================================
 */
 
@@ -72,6 +82,16 @@ BEGIN
 
     BEGIN TRY
         -- ═══════════════════════════════════════════════════════════════════
+        -- EVENTO: SP_INICIO
+        -- ═══════════════════════════════════════════════════════════════════
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_INICIO',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA';
+
+        -- ═══════════════════════════════════════════════════════════════════
         -- PASO 0: Obtener Portfolio si no se proporcionó
         -- ═══════════════════════════════════════════════════════════════════
 
@@ -85,6 +105,15 @@ BEGIN
             BEGIN
                 SET @ErrorMessage = 'No se encontró Portfolio para ID_Fund: ' + CAST(@ID_Fund AS NVARCHAR(10));
                 PRINT @ErrorMessage;
+                -- EVENTO: STANDBY por homologación de fondos
+                EXEC broker.sp_EmitirEvento
+                    @TipoEvento = 'STANDBY',
+                    @ID_Ejecucion = @ID_Ejecucion,
+                    @ID_Proceso = @ID_Proceso,
+                    @ID_Fund = @ID_Fund,
+                    @NombreSP = 'staging.sp_Process_IPA',
+                    @CodigoRetorno = 10,
+                    @Detalles = '{"problema": "HOMOLOGACION_FONDOS"}';
                 RETURN 10;  -- HOMOLOGACION_FONDOS
             END
         END
@@ -187,13 +216,33 @@ BEGIN
         IF @RowsProcessed = 0
         BEGIN
             PRINT 'sp_Process_IPA: Sin datos para procesar';
+            -- EVENTO: SP_FIN con WARNING (sin datos)
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'SP_FIN',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_IPA',
+                @CodigoRetorno = 1,
+                @RowsProcessed = 0;
             RETURN 1;  -- WARNING
         END
 
         PRINT 'sp_Process_IPA: ' + CAST(@RowsProcessed AS NVARCHAR(10)) + ' registros cargados';
 
+        -- CHECKPOINT: ##IPA_Work creada
+        DECLARE @ChkDetalles NVARCHAR(500) = '{"operacion": "CREATED", "objeto": "##IPA_Work", "registros": ' + CAST(@RowsProcessed AS NVARCHAR(10)) + '}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @Detalles = @ChkDetalles;
+
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 3: Homologar instrumentos y monedas
+        -- NOTA: Si ValidateFund pasó, sp_Homologate NO debe fallar
         -- ═══════════════════════════════════════════════════════════════════
 
         EXEC @ReturnCode = staging.sp_Homologate
@@ -212,8 +261,22 @@ BEGIN
 
         IF @ReturnCode != 0
         BEGIN
+            -- ASSERTION_FAILED: Si ValidateFund pasó, esto es un BUG
             SET @ErrorCount = 1;
-            RETURN @ReturnCode;
+            DECLARE @AssertMsg NVARCHAR(500) = 'ASSERTION_FAILED: sp_Homologate falló en IPA pero ValidateFund pasó. Bug en validación. Fondo:' +
+                CAST(ISNULL(@ProblemasFondo,0) AS NVARCHAR) + ' Instr:' + CAST(ISNULL(@ProblemasInstrumento,0) AS NVARCHAR) +
+                ' Moneda:' + CAST(ISNULL(@ProblemasMoneda,0) AS NVARCHAR);
+
+            EXEC broker.sp_EmitirEvento
+                @TipoEvento = 'ERROR',
+                @ID_Ejecucion = @ID_Ejecucion,
+                @ID_Proceso = @ID_Proceso,
+                @ID_Fund = @ID_Fund,
+                @NombreSP = 'staging.sp_Process_IPA',
+                @CodigoRetorno = 4,
+                @Detalles = @AssertMsg;
+
+            RETURN 4;  -- ASSERTION_FAILED
         END
 
         -- Actualizar ID_Fund en todos los registros
@@ -245,6 +308,16 @@ BEGIN
 
         PRINT 'sp_Process_IPA: ' + CAST(@RowsCash AS NVARCHAR(10)) + ' registros Cash extraídos';
 
+        -- CHECKPOINT: ##IPA_Cash creada
+        SET @ChkDetalles = '{"operacion": "CREATED", "objeto": "##IPA_Cash", "registros": ' + CAST(@RowsCash AS NVARCHAR(10)) + '}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @Detalles = @ChkDetalles;
+
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 5: Crear tabla ##IPA_MTM (extraer MTM/Derivados)
         -- ═══════════════════════════════════════════════════════════════════
@@ -269,6 +342,16 @@ BEGIN
         EXEC sp_executesql @SQL;
 
         PRINT 'sp_Process_IPA: ' + CAST(@RowsMTM AS NVARCHAR(10)) + ' registros MTM extraídos';
+
+        -- CHECKPOINT: ##IPA_MTM creada
+        SET @ChkDetalles = '{"operacion": "CREATED", "objeto": "##IPA_MTM", "registros": ' + CAST(@RowsMTM AS NVARCHAR(10)) + '}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @Detalles = @ChkDetalles;
 
         -- ═══════════════════════════════════════════════════════════════════
         -- PASO 6: Crear tabla ##Ajustes (vacía, para acumular ajustes)
@@ -303,9 +386,20 @@ BEGIN
         );';
         EXEC sp_executesql @SQL;
 
+        -- CHECKPOINT: ##Ajustes creada (vacía)
+        SET @ChkDetalles = '{"operacion": "CREATED", "objeto": "##Ajustes", "registros": 0, "mensaje": "Tabla inicializada para acumular ajustes"}';
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'CHECKPOINT',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @Detalles = @ChkDetalles;
+
         -- ═══════════════════════════════════════════════════════════════════
-        -- RESUMEN
+        -- RESUMEN Y EVENTO SP_FIN
         -- ═══════════════════════════════════════════════════════════════════
+        DECLARE @DuracionMs INT = DATEDIFF(second, @StartTime, GETDATE()) * 1000;
 
         PRINT '========================================';
         PRINT 'sp_Process_IPA COMPLETADO';
@@ -313,8 +407,19 @@ BEGIN
         PRINT 'Registros totales: ' + CAST(@RowsProcessed AS NVARCHAR(10));
         PRINT 'Registros Cash: ' + CAST(@RowsCash AS NVARCHAR(10));
         PRINT 'Registros MTM: ' + CAST(@RowsMTM AS NVARCHAR(10));
-        PRINT 'Tiempo: ' + CAST(DATEDIFF(MILLISECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' ms';
+        PRINT 'Tiempo: ' + CAST(@DuracionMs AS NVARCHAR(10)) + ' ms';
         PRINT '========================================';
+
+        -- EVENTO: SP_FIN exitoso
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'SP_FIN',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @CodigoRetorno = 0,
+            @DuracionMs = @DuracionMs,
+            @RowsProcessed = @RowsProcessed;
 
         RETURN 0;  -- OK
 
@@ -333,6 +438,16 @@ BEGIN
             @TempTablesToClean = @TablesToClean,
             @ReturnCode = @ReturnCode OUTPUT,
             @ErrorMessage = @ErrorMessage OUTPUT;
+
+        -- EVENTO: ERROR
+        EXEC broker.sp_EmitirEvento
+            @TipoEvento = 'ERROR',
+            @ID_Ejecucion = @ID_Ejecucion,
+            @ID_Proceso = @ID_Proceso,
+            @ID_Fund = @ID_Fund,
+            @NombreSP = 'staging.sp_Process_IPA',
+            @CodigoRetorno = 3,
+            @Detalles = @ErrorMessage;
 
         RETURN @ReturnCode;
     END CATCH

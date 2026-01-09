@@ -12,7 +12,9 @@
       "Bash(git restore:*)",
       "Bash(git commit:*)",
       "mcp__sqlserver-moneda__list_views",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "mcp__sqlserver-moneda__list_indexes"
     ]
   },
   "enabledMcpjsonServers": [

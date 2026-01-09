@@ -170,27 +170,27 @@ router.get('/fund-form-options', async (req, res) => {
       // Monedas desde BD_Monedas_Dimensiones
       pool.request().query(`
         SELECT id_CURR as id, Code as codigo, LocalCurrency as nombre
-        FROM Inteligencia_Producto_Dev.dimensionales.BD_Monedas_Dimensiones
+        FROM dimensionales.BD_Monedas_Dimensiones
         ORDER BY Code
       `),
       // Estrategias Consolidación Fondo (valores únicos existentes)
       pool.request().query(`
         SELECT DISTINCT Estrategia_Cons_Fondo as valor
-        FROM Inteligencia_Producto_Dev.dimensionales.BD_Funds
+        FROM dimensionales.BD_Funds
         WHERE Estrategia_Cons_Fondo IS NOT NULL
         ORDER BY Estrategia_Cons_Fondo
       `),
       // Estrategias Comparador (valores únicos existentes)
       pool.request().query(`
         SELECT DISTINCT Estrategia_Comparador as valor
-        FROM Inteligencia_Producto_Dev.dimensionales.BD_Funds
+        FROM dimensionales.BD_Funds
         WHERE Estrategia_Comparador IS NOT NULL
         ORDER BY Estrategia_Comparador
       `),
       // Benchmarks para BM1 y BM2
       pool.request().query(`
         SELECT ID_BM as id, FundShortName as codigo, BMName as nombre
-        FROM Inteligencia_Producto_Dev.dimensionales.BD_Benchmarks
+        FROM dimensionales.BD_Benchmarks
         ORDER BY BMName
       `),
     ]);
@@ -228,7 +228,7 @@ router.get('/options/:type', async (req, res) => {
         query = `
           SELECT ID_Fund as id, FundShortName as nombre, FundName as nombreCompleto,
                  FundBaseCurrency as moneda, Activo_MantenedorFondos as activo
-          FROM Inteligencia_Producto_Dev.dimensionales.BD_Funds
+          FROM dimensionales.BD_Funds
           ORDER BY FundShortName
         `;
         break;
@@ -236,7 +236,7 @@ router.get('/options/:type', async (req, res) => {
       case 'monedas':
         query = `
           SELECT DISTINCT id_CURR as id, Name as nombre, Source as fuente
-          FROM Inteligencia_Producto_Dev.dimensionales.HOMOL_Monedas
+          FROM dimensionales.HOMOL_Monedas
           ${source ? "WHERE Source = @source" : ""}
           ORDER BY Name
         `;
@@ -247,7 +247,7 @@ router.get('/options/:type', async (req, res) => {
         query = `
           SELECT ID_BM as id, FundShortName as nombre, BMName as nombreCompleto,
                  FundBaseCurrency as moneda
-          FROM Inteligencia_Producto_Dev.dimensionales.BD_Benchmarks
+          FROM dimensionales.BD_Benchmarks
           ORDER BY BMName
         `;
         break;
@@ -511,75 +511,9 @@ router.post('/:queueType/resolve-batch', async (req, res) => {
   }
 });
 
-// ============================================
-// HELPER: Actualizar contadores stand-by
-// ============================================
-async function _actualizarContadorStandBy(pool, queueType, item) {
-  const tipoProblemaMap = {
-    'suciedades': 'SUCIEDADES',
-    'descuadres': 'DESCUADRES',
-    'instrumentos': 'HOMOLOGACION',
-    'fondos': 'HOMOLOGACION',
-    'monedas': 'HOMOLOGACION',
-    'benchmarks': 'HOMOLOGACION'
-  };
-
-  const tipoProblema = tipoProblemaMap[queueType];
-  if (!tipoProblema) return; // Solo aplica para colas de stand-by
-
-  try {
-    // Incrementar contador de resueltos
-    await pool.request()
-      .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
-      .input('ID_Fund', sql.Int, item.ID_Fund || 0)
-      .input('TipoProblema', sql.NVarChar, tipoProblema)
-      .query(`
-        UPDATE Inteligencia_Producto_Dev.logs.FondosEnStandBy
-        SET ProblemasResueltos = ProblemasResueltos + 1
-        WHERE ID_Ejecucion = @ID_Ejecucion
-          AND ID_Fund = @ID_Fund
-          AND TipoProblema = @TipoProblema
-          AND Estado = 'PENDIENTE';
-
-        -- Si todos resueltos, marcar APROBADO
-        UPDATE Inteligencia_Producto_Dev.logs.FondosEnStandBy
-        SET Estado = 'APROBADO', FechaResolucion = GETDATE()
-        WHERE ID_Ejecucion = @ID_Ejecucion
-          AND ID_Fund = @ID_Fund
-          AND TipoProblema = @TipoProblema
-          AND ProblemasResueltos >= CantidadProblemas
-          AND Estado = 'PENDIENTE';
-      `);
-
-    // Verificar si TODOS los problemas están APROBADOS
-    const todosAprobados = await pool.request()
-      .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
-      .input('ID_Fund', sql.Int, item.ID_Fund || 0)
-      .query(`
-        SELECT COUNT(*) as PendientesCount
-        FROM Inteligencia_Producto_Dev.logs.FondosEnStandBy
-        WHERE ID_Ejecucion = @ID_Ejecucion
-          AND ID_Fund = @ID_Fund
-          AND Estado = 'PENDIENTE'
-      `);
-
-    if (todosAprobados.recordset[0].PendientesCount === 0) {
-      // Todos resueltos - marcar listo para resume
-      await pool.request()
-        .input('ID_Ejecucion', sql.BigInt, item.ID_Ejecucion || 0)
-        .input('ID_Fund', sql.Int, item.ID_Fund || 0)
-        .query(`
-          UPDATE Inteligencia_Producto_Dev.logs.Ejecucion_Fondos
-          SET EstadoStandBy = 'APROBADO'
-          WHERE ID_Ejecucion = @ID_Ejecucion
-            AND ID_Fund = @ID_Fund
-            AND EstadoStandBy = 'PAUSADO';
-        `);
-    }
-  } catch (_error) {
-    // Error silencioso actualizando contadores
-  }
-}
+// NOTA: _actualizarContadorStandBy eliminado - usaba tablas legacy
+// (logs.FondosEnStandBy, logs.Ejecucion_Fondos)
+// El estado de stand-by ahora se maneja via Service Broker → WebSocket
 
 // ============================================
 // POST /api/sandbox-queues/:queueType/resolve - Resolver y escribir en dimensional
@@ -619,7 +553,7 @@ router.post('/:queueType/resolve', async (req, res) => {
           .input('source', sql.NVarChar, item.fuente)
           .query(`
             SELECT COUNT(*) as count
-            FROM Inteligencia_Producto_Dev.dimensionales.HOMOL_Funds
+            FROM dimensionales.HOMOL_Funds
             WHERE Portfolio = @portfolio AND Source = @source
           `);
 
@@ -639,7 +573,7 @@ router.post('/:queueType/resolve', async (req, res) => {
           // 1. Obtener el siguiente ID disponible
           const maxIdResult = await pool.request().query(`
             SELECT ISNULL(MAX(CAST(ID_Fund AS INT)), 0) + 1 as nextId
-            FROM Inteligencia_Producto_Dev.dimensionales.BD_Funds
+            FROM dimensionales.BD_Funds
           `);
           newFundId = String(maxIdResult.recordset[0].nextId);
 
@@ -658,13 +592,13 @@ router.post('/:queueType/resolve', async (req, res) => {
             .input('flagDerivados', sql.Bit, asignacion.flagDerivados ? 1 : 0)
             .input('flagUBS', sql.Bit, asignacion.flagUBS ? 1 : 0)
             .query(`
-              INSERT INTO Inteligencia_Producto_Dev.dimensionales.BD_Funds
+              INSERT INTO dimensionales.BD_Funds
               (ID_Fund, FundShortName, FundName, FundBaseCurrency, id_CURR, NombreTupungato,
                Estrategia_Cons_Fondo, Estrategia_Comparador, BM1, BM2,
                Activo_MantenedorFondos, Flag_Derivados, Flag_UBS)
               VALUES
               (@idFund, @fundShortName, @fundName,
-               (SELECT TOP 1 Code FROM Inteligencia_Producto_Dev.dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @idCurr),
+               (SELECT TOP 1 Code FROM dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @idCurr),
                @idCurr, @nombreTupungato, @estrategiaConsFondo, @estrategiaComparador, @bm1, @bm2,
                1, @flagDerivados, @flagUBS)
             `);
@@ -684,7 +618,7 @@ router.post('/:queueType/resolve', async (req, res) => {
             .input('src', sql.NVarChar, src)
             .query(`
               SELECT COUNT(*) as count
-              FROM Inteligencia_Producto_Dev.dimensionales.HOMOL_Funds
+              FROM dimensionales.HOMOL_Funds
               WHERE Portfolio = @portfolio AND Source = @src
             `);
 
@@ -694,7 +628,7 @@ router.post('/:queueType/resolve', async (req, res) => {
               .input('idFund', sql.NVarChar, newFundId)
               .input('src', sql.NVarChar, src)
               .query(`
-                INSERT INTO Inteligencia_Producto_Dev.dimensionales.HOMOL_Funds (Portfolio, ID_Fund, Source)
+                INSERT INTO dimensionales.HOMOL_Funds (Portfolio, ID_Fund, Source)
                 VALUES (@portfolio, @idFund, @src)
               `);
           }
@@ -710,7 +644,7 @@ router.post('/:queueType/resolve', async (req, res) => {
           .input('source', sql.NVarChar, item.fuente)
           .query(`
             SELECT COUNT(*) as count
-            FROM Inteligencia_Producto_Dev.dimensionales.HOMOL_Monedas
+            FROM dimensionales.HOMOL_Monedas
             WHERE Name = @name AND Source = @source
           `);
 
@@ -722,7 +656,7 @@ router.post('/:queueType/resolve', async (req, res) => {
         }
 
         insertQuery = `
-          INSERT INTO Inteligencia_Producto_Dev.dimensionales.HOMOL_Monedas (Name, id_CURR, Source)
+          INSERT INTO dimensionales.HOMOL_Monedas (Name, id_CURR, Source)
           VALUES (@name, @idCurr, @source)
         `;
         insertRequest.input('name', sql.NVarChar, item.nombreMoneda);
@@ -737,7 +671,7 @@ router.post('/:queueType/resolve', async (req, res) => {
           .input('source', sql.NVarChar, item.fuente)
           .query(`
             SELECT COUNT(*) as count
-            FROM Inteligencia_Producto_Dev.dimensionales.HOMOL_Benchmarks
+            FROM dimensionales.HOMOL_Benchmarks
             WHERE Portfolio = @portfolio AND Source = @source
           `);
 
@@ -757,11 +691,11 @@ router.post('/:queueType/resolve', async (req, res) => {
           // 1. Obtener el siguiente ID disponible
           const maxBmIdResult = await pool.request().query(`
             SELECT ISNULL(MAX(CAST(ID_BM AS INT)), 0) + 1 as nextId
-            FROM Inteligencia_Producto_Dev.dimensionales.BD_Benchmarks
+            FROM dimensionales.BD_Benchmarks
           `);
           newBenchmarkId = maxBmIdResult.recordset[0].nextId;
 
-          // 2. Insertar en BD_Benchmarks (tabla maestra en Inteligencia_Producto_Dev)
+          // 2. Insertar en BD_Benchmarks (tabla maestra)
           await pool.request()
             .input('idBm', sql.NVarChar, String(newBenchmarkId))
             .input('fundShortName', sql.NVarChar, asignacion.fundShortName)
@@ -770,11 +704,11 @@ router.post('/:queueType/resolve', async (req, res) => {
             .input('nombreTupungato', sql.NVarChar, item.nombreBenchmark)
             .input('estrategia', sql.NVarChar, asignacion.estrategia || null)
             .query(`
-              INSERT INTO Inteligencia_Producto_Dev.dimensionales.BD_Benchmarks
+              INSERT INTO dimensionales.BD_Benchmarks
               (ID_BM, FundShortName, BMName, FundBaseCurrency, NombreTupungato, Estrategia_Comparador)
               VALUES
               (@idBm, @fundShortName, @bmName,
-               (SELECT TOP 1 Code FROM Inteligencia_Producto_Dev.dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @fundBaseCurrency),
+               (SELECT TOP 1 Code FROM dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @fundBaseCurrency),
                @nombreTupungato, @estrategia)
             `);
 
@@ -791,7 +725,7 @@ router.post('/:queueType/resolve', async (req, res) => {
               (ID_BM, FundShortName, BMName, FundBaseCurrency, NombreTupungato, Estrategia_Comparador)
               VALUES
               (@idBm, @fundShortName, @bmName,
-               (SELECT TOP 1 Code FROM Inteligencia_Producto_Dev.dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @fundBaseCurrency),
+               (SELECT TOP 1 Code FROM dimensionales.BD_Monedas_Dimensiones WHERE id_CURR = @fundBaseCurrency),
                @nombreTupungato, @estrategia)
             `);
         } else {
@@ -803,7 +737,7 @@ router.post('/:queueType/resolve', async (req, res) => {
 
         // 3. Insertar en HOMOL_Benchmarks
         insertQuery = `
-          INSERT INTO Inteligencia_Producto_Dev.dimensionales.HOMOL_Benchmarks (Portfolio, ID_BM, Source)
+          INSERT INTO dimensionales.HOMOL_Benchmarks (Portfolio, ID_BM, Source)
           VALUES (@portfolio, @idBm, @source)
         `;
         insertRequest.input('portfolio', sql.NVarChar, item.nombreBenchmark);
@@ -812,20 +746,20 @@ router.post('/:queueType/resolve', async (req, res) => {
         break;
 
       case 'suciedades':
-        // Insertar en tabla de stock de suciedades (Inteligencia_Producto_Dev.stock.Suciedades)
+        // Insertar en tabla de stock de suciedades (stock.Suciedades)
         // Solo si el estado es 'Suciedad' (confirmado) Y tiene clasificación CXC/CXP
         if (asignacion.estado === 'Suciedad' && asignacion.clasificacion) {
           insertQuery = `
             IF NOT EXISTS (
-              SELECT 1 FROM Inteligencia_Producto_Dev.stock.Suciedades
+              SELECT 1 FROM stock.Suciedades
               WHERE investId = @investId AND portfolio = @portfolio
             )
-            INSERT INTO Inteligencia_Producto_Dev.stock.Suciedades
+            INSERT INTO stock.Suciedades
             (investId, portfolio, qty, estado, clasificacion, observaciones)
             VALUES (@investId, @portfolio, @qty, @estado, @clasificacion, @observaciones)
             ELSE
             -- Si ya existe, actualizar clasificación (por si cambió)
-            UPDATE Inteligencia_Producto_Dev.stock.Suciedades
+            UPDATE stock.Suciedades
             SET clasificacion = @clasificacion,
                 qty = @qty,
                 fechaConfirmacion = GETDATE(),
@@ -860,7 +794,7 @@ router.post('/:queueType/resolve', async (req, res) => {
           .input('idAlertaOrigen', sql.Int, parseInt(id))
           .input('datosOrigen', sql.NVarChar, item.datosOrigen || null)
           .query(`
-            INSERT INTO Inteligencia_Producto_Dev.stock.descuadresHistorial
+            INSERT INTO stock.descuadresHistorial
             (tipoDescuadre, portfolio, montoA, montoB, diferencia, fechaReporte,
              estado, observaciones, usuarioAprobacion)
             VALUES
@@ -879,9 +813,6 @@ router.post('/:queueType/resolve', async (req, res) => {
             SET estado = @estado, accion = @accion, observaciones = @observaciones, fechaProcesado = GETDATE()
             WHERE id = @id
           `);
-
-        // NUEVO: Actualizar contadores stand-by
-        await _actualizarContadorStandBy(pool, queueType, item);
 
         // Retornar aquí para evitar el UPDATE genérico
         return res.json({
@@ -904,9 +835,6 @@ router.post('/:queueType/resolve', async (req, res) => {
       .input('id', sql.Int, parseInt(id))
       .input('estado', sql.NVarChar, nuevoEstado)
       .query(`UPDATE ${config.table} SET estado = @estado, fechaProcesado = GETDATE() WHERE id = @id`);
-
-    // NUEVO: Actualizar contadores stand-by
-    await _actualizarContadorStandBy(pool, queueType, item);
 
     res.json({
       success: true,

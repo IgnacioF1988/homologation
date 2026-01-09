@@ -7,14 +7,20 @@ const { getPool, getPoolHomologacion, closePool } = require('./config/database')
 // Importar WebSocket Manager
 const wsManager = require('./services/websocket/WebSocketManager');
 
+// Importar Service Broker Listener (arquitectura DB-centric)
+const serviceBrokerListener = require('./services/broker/ServiceBrokerListener');
+
 // Importar rutas
 const catalogosRoutes = require('./routes/catalogos.routes');
 const instrumentosRoutes = require('./routes/instrumentos.routes');
 const companiasRoutes = require('./routes/companias.routes');
 const colaPendientesRoutes = require('./routes/colaPendientes.routes');
-const procesosV2Routes = require('./routes/procesos.v2.routes');
+// OBSOLETO: Reemplazado por pipeline.routes.js (arquitectura DB-centric)
+// const procesosV2Routes = require('./routes/procesos.v2.routes.OLD');
 const sandboxQueuesRoutes = require('./routes/sandboxQueues.routes');
-const logsRoutes = require('./routes/logs.routes');
+// OBSOLETO: Consultas a estructura DB antigua
+// const logsRoutes = require('./routes/logs.routes.OLD');
+const pipelineRoutes = require('./routes/pipeline.routes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -42,6 +48,9 @@ app.get('/api/health', async (req, res) => {
     const result1 = await poolPrincipal.request().query('SELECT DB_NAME() as db');
     const result2 = await poolHomologacion.request().query('SELECT DB_NAME() as db');
 
+    // Estado del Service Broker Listener
+    const brokerStatus = serviceBrokerListener.getStatus();
+
     res.json({
       success: true,
       status: 'healthy',
@@ -49,6 +58,8 @@ app.get('/api/health', async (req, res) => {
         principal: result1.recordset[0].db,
         homologacion: result2.recordset[0].db,
       },
+      serviceBroker: brokerStatus,
+      websocket: wsManager.getStats(),
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
@@ -66,12 +77,14 @@ app.use('/api/catalogos', catalogosRoutes);
 app.use('/api/instrumentos', instrumentosRoutes);
 app.use('/api/companias', companiasRoutes);
 app.use('/api/cola-pendientes', colaPendientesRoutes);
-// Rutas de procesos v2 (parallel processing con logging estructurado)
-app.use('/api/procesos', procesosV2Routes);
+// OBSOLETO: Rutas de procesos v2 - reemplazadas por /api/pipeline (DB-centric)
+// app.use('/api/procesos', procesosV2Routes);
 // Rutas unificadas de colas sandbox (Mission Control)
 app.use('/api/sandbox-queues', sandboxQueuesRoutes);
-// Rutas de logs
-app.use('/api/logs', logsRoutes);
+// OBSOLETO: Rutas de logs - estructura DB antigua
+// app.use('/api/logs', logsRoutes);
+// Rutas de pipeline (arquitectura DB-centric)
+app.use('/api/pipeline', pipelineRoutes);
 
 // Ruta raíz
 app.get('/api', (req, res) => {
@@ -122,6 +135,23 @@ app.get('/api', (req, res) => {
         update: 'PUT /api/cola-pendientes/:id',
         delete: 'DELETE /api/cola-pendientes/:id',
       },
+      pipeline: {
+        iniciar: 'POST /api/pipeline/iniciar',
+        pausar: 'POST /api/pipeline/:id/pausar',
+        resumir: 'POST /api/pipeline/:id/resumir',
+        cancelar: 'POST /api/pipeline/:id/cancelar',
+        reprocesar: 'POST /api/pipeline/:id/reprocesar/:idFund',
+        estado: 'GET /api/pipeline/:id/estado',
+        activas: 'GET /api/pipeline/activas',
+        historial: 'GET /api/pipeline/historial',
+        brokerStatus: 'GET /api/pipeline/broker/status',
+        brokerTest: 'POST /api/pipeline/broker/test',
+      },
+      websocket: {
+        connect: 'WS /api/ws/pipeline',
+        subscribe: 'Send: { type: "SUBSCRIBE", data: { ID_Ejecucion: 123 } }',
+        unsubscribe: 'Send: { type: "UNSUBSCRIBE", data: { ID_Ejecucion: 123 } }',
+      },
     },
   });
 });
@@ -164,22 +194,59 @@ const server = app.listen(PORT, HOST, async () => {
   // INICIALIZAR WEBSOCKET MANAGER
   // ============================================
   try {
-    wsManager.initialize(server, getPool);
+    wsManager.initialize(server);
     console.log('✅ WebSocket Manager inicializado\n');
   } catch (err) {
     console.error('❌ Error inicializando WebSocket Manager:', err.message);
   }
 
   // ============================================
-  // JOBS DE SINCRONIZACIÓN - ELIMINADOS
+  // INICIALIZAR SERVICE BROKER LISTENER
   // ============================================
-  // Sistema de sincronización bidireccional eliminado el 2025-12-18
-  console.log('ℹ️  Sistema de sincronización legacy descontinuado\n');
+  // Arquitectura DB-centric: La DB orquesta, el backend escucha
+  try {
+    const dbConfig = {
+      server: process.env.DB_SERVER || 'localhost',
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      port: parseInt(process.env.DB_PORT) || 1433,
+      options: {
+        encrypt: process.env.DB_ENCRYPT === 'true',
+        trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === 'true',
+      },
+      authentication: process.env.DB_USER ? {
+        type: 'default',
+        options: {
+          userName: process.env.DB_USER,
+          password: process.env.DB_PASSWORD
+        }
+      } : {
+        type: 'ntlm',
+        options: {
+          domain: process.env.DB_DOMAIN || '',
+        }
+      },
+    };
+
+    await serviceBrokerListener.initialize(dbConfig, wsManager);
+    console.log('✅ Service Broker Listener inicializado\n');
+  } catch (err) {
+    console.error('❌ Error inicializando Service Broker Listener:', err.message);
+    console.log('   El servidor continuará sin push notifications desde DB\n');
+  }
+
+  console.log('🎯 Arquitectura DB-centric activa:');
+  console.log('   - DB orquesta el pipeline');
+  console.log('   - Service Broker emite eventos');
+  console.log('   - Backend escucha y retransmite via WebSocket\n');
 });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Apagando servidor...');
+
+  // Detener Service Broker Listener primero
+  await serviceBrokerListener.stop();
 
   // Cerrar WebSocket Manager
   wsManager.close();
@@ -196,6 +263,9 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Apagando servidor...');
+
+  // Detener Service Broker Listener primero
+  await serviceBrokerListener.stop();
 
   // Cerrar WebSocket Manager
   wsManager.close();
